@@ -3,6 +3,10 @@ const SIDEBAR_WIDTH_KEY = "dcm-editor-sidebar-width";
 const DEFAULT_SIDEBAR_WIDTH = 290;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 520;
+const DETAIL_VISUAL_WIDTH_KEY = "dcm-editor-detail-visual-width";
+const DEFAULT_DETAIL_VISUAL_WIDTH = 360;
+const MIN_DETAIL_VISUAL_WIDTH = 260;
+const MAX_DETAIL_VISUAL_WIDTH = 760;
 
 const state = {
   filePath: "",
@@ -19,11 +23,17 @@ const state = {
   compareIssues: [],
   undoStack: [],
   redoStack: [],
+  surfaceView: {
+    yaw: -0.8,
+    pitch: 1.02,
+    zoom: 1,
+  },
 };
 
 const els = {
   filePath: document.querySelector("#file-path"),
   sidebarResizer: document.querySelector("#sidebar-resizer"),
+  detailResizer: document.querySelector("#detail-resizer"),
   dcmFileInput: document.querySelector("#dcm-file-input"),
   pickDcmFile: document.querySelector("#pick-dcm-file"),
   comparePath: document.querySelector("#compare-path"),
@@ -46,6 +56,7 @@ const els = {
   compareOverviewBody: document.querySelector("#compare-overview-body"),
   emptyState: document.querySelector("#empty-state"),
   detailView: document.querySelector("#detail-view"),
+  main: document.querySelector(".main"),
   detailKind: document.querySelector("#detail-kind"),
   detailName: document.querySelector("#detail-name"),
   lineRange: document.querySelector("#line-range"),
@@ -101,11 +112,23 @@ function clampSidebarWidth(width) {
   return Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width));
 }
 
+function clampDetailVisualWidth(width) {
+  return Math.max(MIN_DETAIL_VISUAL_WIDTH, Math.min(MAX_DETAIL_VISUAL_WIDTH, width));
+}
+
 function applySidebarWidth(width, persist = true) {
   const normalizedWidth = clampSidebarWidth(width);
   document.documentElement.style.setProperty("--sidebar-width", `${normalizedWidth}px`);
   if (persist) {
     window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(normalizedWidth));
+  }
+}
+
+function applyDetailVisualWidth(width, persist = true) {
+  const normalizedWidth = clampDetailVisualWidth(width);
+  document.documentElement.style.setProperty("--detail-visual-width", `${normalizedWidth}px`);
+  if (persist) {
+    window.localStorage.setItem(DETAIL_VISUAL_WIDTH_KEY, String(normalizedWidth));
   }
 }
 
@@ -116,6 +139,15 @@ function initializeSidebarWidth() {
     return;
   }
   applySidebarWidth(DEFAULT_SIDEBAR_WIDTH, false);
+}
+
+function initializeDetailVisualWidth() {
+  const storedWidth = Number(window.localStorage.getItem(DETAIL_VISUAL_WIDTH_KEY));
+  if (Number.isFinite(storedWidth)) {
+    applyDetailVisualWidth(storedWidth, false);
+    return;
+  }
+  applyDetailVisualWidth(DEFAULT_DETAIL_VISUAL_WIDTH, false);
 }
 
 function setupSidebarResizer() {
@@ -180,6 +212,71 @@ function setupSidebarResizer() {
 
   els.sidebarResizer.addEventListener("dblclick", () => {
     applySidebarWidth(DEFAULT_SIDEBAR_WIDTH, true);
+  });
+}
+
+function setupDetailResizer() {
+  if (!els.detailResizer) {
+    return;
+  }
+
+  const startResize = (startX) => {
+    const startWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-visual-width"))
+      || DEFAULT_DETAIL_VISUAL_WIDTH;
+
+    const handleMove = (clientX) => {
+      const nextWidth = startWidth - (clientX - startX);
+      applyDetailVisualWidth(nextWidth, false);
+    };
+
+    const onPointerMove = (event) => {
+      handleMove(event.clientX);
+    };
+
+    const stopResize = () => {
+      document.body.classList.remove("is-detail-resizing");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-visual-width"));
+      applyDetailVisualWidth(width, true);
+    };
+
+    document.body.classList.add("is-detail-resizing");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  };
+
+  els.detailResizer.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      return;
+    }
+    event.preventDefault();
+    els.detailResizer.setPointerCapture?.(event.pointerId);
+    startResize(event.clientX);
+  });
+
+  els.detailResizer.addEventListener("keydown", (event) => {
+    const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-visual-width"))
+      || DEFAULT_DETAIL_VISUAL_WIDTH;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      applyDetailVisualWidth(currentWidth + 20, true);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      applyDetailVisualWidth(currentWidth - 20, true);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyDetailVisualWidth(MIN_DETAIL_VISUAL_WIDTH, true);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyDetailVisualWidth(MAX_DETAIL_VISUAL_WIDTH, true);
+    }
+  });
+
+  els.detailResizer.addEventListener("dblclick", () => {
+    applyDetailVisualWidth(DEFAULT_DETAIL_VISUAL_WIDTH, true);
   });
 }
 
@@ -547,6 +644,19 @@ function renderAll() {
   renderButtons();
 }
 
+function revealDetailPanel() {
+  if (!els.detailView || els.detailView.classList.contains("hidden")) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    els.detailView.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+      inline: "nearest",
+    });
+  });
+}
+
 function renderFiles() {
   if (!state.files.length) {
     els.fileList.innerHTML = '<p class="muted">No `.dcm` files found under this workspace.</p>';
@@ -589,6 +699,7 @@ function renderParameterList() {
     button.addEventListener("click", () => {
       state.selectedName = name;
       renderAll();
+      revealDetailPanel();
     });
     els.parameterList.appendChild(button);
   });
@@ -890,8 +1001,8 @@ function renderVisualization(parameter, original) {
   }
 
   if (parameter.kind === "map") {
-    els.visualHint.textContent = "Heatmap generated from current cell values";
-    els.visualSlot.appendChild(renderHeatmap(parameter));
+    els.visualHint.textContent = "3D surface generated from current map values";
+    els.visualSlot.appendChild(renderSurface3D(parameter));
   }
 }
 
@@ -1016,12 +1127,12 @@ function renderComparison(parameter) {
   }
 }
 
-function renderHeatmap(parameter) {
+function renderSurface3D(parameter) {
   const numericRows = parameter.map_values.map((row) => row.map((value) => Number(value)));
   if (numericRows.some((row) => row.some(Number.isNaN))) {
     const fallback = document.createElement("p");
     fallback.className = "muted";
-    fallback.textContent = "Heatmap is available only when every cell is numeric.";
+    fallback.textContent = "3D surface view is available only when every map cell is numeric.";
     return fallback;
   }
 
@@ -1029,32 +1140,284 @@ function renderHeatmap(parameter) {
   const min = Math.min(...flat);
   const max = Math.max(...flat);
   const range = max - min || 1;
-
+  const cols = numericRows[0]?.length || 0;
+  const rows = numericRows.length;
   const wrapper = document.createElement("div");
-  wrapper.className = "heatmap";
-  wrapper.style.gridTemplateColumns = "1fr";
+  wrapper.className = "surface-view";
+  wrapper.innerHTML = `
+    <div class="surface-toolbar">
+      <span class="surface-help">Drag to rotate · wheel to zoom</span>
+      <div class="surface-controls">
+        <button type="button" class="ghost-button surface-control" data-action="yaw-left" aria-label="Rotate left">Left</button>
+        <button type="button" class="ghost-button surface-control" data-action="yaw-right" aria-label="Rotate right">Right</button>
+        <button type="button" class="ghost-button surface-control" data-action="pitch-up" aria-label="Tilt up">Up</button>
+        <button type="button" class="ghost-button surface-control" data-action="pitch-down" aria-label="Tilt down">Down</button>
+        <button type="button" class="ghost-button surface-control" data-action="zoom-in" aria-label="Zoom in">+</button>
+        <button type="button" class="ghost-button surface-control" data-action="zoom-out" aria-label="Zoom out">-</button>
+        <button type="button" class="ghost-button surface-reset">Reset View</button>
+      </div>
+    </div>
+    <div class="surface-stage">
+      <div class="surface-canvas"></div>
+    </div>
+    <div class="surface-legend">
+      <span class="surface-legend-label">Low ${escapeHtml(String(min))}</span>
+      <div class="surface-legend-ramp"></div>
+      <span class="surface-legend-label">High ${escapeHtml(String(max))}</span>
+    </div>
+  `;
 
-  numericRows.forEach((row, rowIndex) => {
-    const rowElement = document.createElement("div");
-    rowElement.className = "heatmap-row";
-    rowElement.style.gridTemplateColumns = `120px repeat(${row.length}, minmax(0, 1fr))`;
+  const stage = wrapper.querySelector(".surface-stage");
+  const canvas = wrapper.querySelector(".surface-canvas");
+  const resetButton = wrapper.querySelector(".surface-reset");
+  const controlButtons = wrapper.querySelectorAll(".surface-control");
 
-    const label = document.createElement("div");
-    label.className = "compare-pill";
-    label.textContent = `Y ${parameter.y_axis[rowIndex]}`;
-    rowElement.appendChild(label);
+  const buildSurfaceMarkup = () => {
+    const yaw = state.surfaceView.yaw;
+    const pitch = state.surfaceView.pitch;
+    const zoom = state.surfaceView.zoom;
+    const spacingX = 1.8;
+    const spacingY = 1.8;
+    const heightScale = 4.2;
+    const basePoints = [];
+    const cx = (cols - 1) / 2;
+    const cy = (rows - 1) / 2;
 
-    row.forEach((value) => {
-      const ratio = (value - min) / range;
-      const cell = document.createElement("div");
-      cell.className = "heatmap-cell";
-      cell.style.background = `hsl(${24 + ratio * 120}, 58%, ${34 + ratio * 18}%)`;
-      cell.textContent = String(value);
-      rowElement.appendChild(cell);
-    });
+    const rotatePoint = (x, y, z) => {
+      const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
+      const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
+      const pitchY = yawY * Math.cos(pitch) - z * Math.sin(pitch);
+      const pitchZ = yawY * Math.sin(pitch) + z * Math.cos(pitch);
+      return { x: yawX, y: pitchY, z: pitchZ };
+    };
 
-    wrapper.appendChild(rowElement);
+    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+      const currentRow = [];
+      for (let colIndex = 0; colIndex < cols; colIndex += 1) {
+        const normalized = (numericRows[rowIndex][colIndex] - min) / range;
+        currentRow.push({
+          rowIndex,
+          colIndex,
+          normalized,
+          value: numericRows[rowIndex][colIndex],
+          point: rotatePoint((colIndex - cx) * spacingX, (rowIndex - cy) * spacingY, normalized * heightScale),
+        });
+      }
+      basePoints.push(currentRow);
+    }
+
+    const allPoints = basePoints.flat().map(({ point }) => point);
+    const extentX = Math.max(...allPoints.map((point) => Math.abs(point.x))) || 1;
+    const extentY = Math.max(...allPoints.map((point) => Math.abs(point.y))) || 1;
+    const padding = 46;
+    const width = 560;
+    const height = 360;
+    const scale = Math.min((width - padding * 2) / (extentX * 2 || 1), (height - padding * 2) / (extentY * 2 || 1)) * zoom;
+    const centerX = width / 2;
+    const centerY = height / 2 + 12;
+
+    const projected = basePoints.map((row) => row.map((entry) => ({
+      ...entry,
+      screenX: centerX + entry.point.x * scale,
+      screenY: centerY + entry.point.y * scale,
+      depth: entry.point.z,
+    })));
+
+    const averageDepth = (points) => points.reduce((total, point) => total + point.depth, 0) / Math.max(points.length, 1);
+    const xAxisRowIndex = projected
+      .map((row, rowIndex) => ({ rowIndex, depth: averageDepth(row) }))
+      .sort((left, right) => right.depth - left.depth)[0]?.rowIndex ?? Math.max(rows - 1, 0);
+    const yAxisColumnIndex = Array.from({ length: cols }, (_, colIndex) => ({
+      colIndex,
+      depth: averageDepth(projected.map((row) => row[colIndex])),
+    })).sort((left, right) => right.depth - left.depth)[0]?.colIndex ?? 0;
+
+    const quads = [];
+    for (let rowIndex = 0; rowIndex < rows - 1; rowIndex += 1) {
+      for (let colIndex = 0; colIndex < cols - 1; colIndex += 1) {
+        const p1 = projected[rowIndex][colIndex];
+        const p2 = projected[rowIndex][colIndex + 1];
+        const p3 = projected[rowIndex + 1][colIndex + 1];
+        const p4 = projected[rowIndex + 1][colIndex];
+        const avgValue = (p1.normalized + p2.normalized + p3.normalized + p4.normalized) / 4;
+        const avgDepth = (p1.depth + p2.depth + p3.depth + p4.depth) / 4;
+        quads.push({ points: [p1, p2, p3, p4], avgValue, avgDepth });
+      }
+    }
+    quads.sort((left, right) => left.avgDepth - right.avgDepth);
+
+    const polygons = quads.map(({ points, avgValue }) => {
+      const hue = 24 + avgValue * 125;
+      const light = 38 + avgValue * 18;
+      const fill = `hsl(${hue}, 62%, ${light}%)`;
+      const pointsAttr = points.map((point) => `${point.screenX.toFixed(1)},${point.screenY.toFixed(1)}`).join(" ");
+      return `<polygon points="${pointsAttr}" fill="${fill}" stroke="rgba(46, 35, 25, 0.18)" stroke-width="1"></polygon>`;
+    }).join("");
+
+    const meshLines = [];
+    for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+      meshLines.push(`<polyline points="${projected[rowIndex].map((point) => `${point.screenX.toFixed(1)},${point.screenY.toFixed(1)}`).join(" ")}" fill="none" stroke="rgba(46, 35, 25, 0.22)" stroke-width="1"></polyline>`);
+    }
+    for (let colIndex = 0; colIndex < cols; colIndex += 1) {
+      meshLines.push(`<polyline points="${projected.map((row) => row[colIndex]).map((point) => `${point.screenX.toFixed(1)},${point.screenY.toFixed(1)}`).join(" ")}" fill="none" stroke="rgba(46, 35, 25, 0.22)" stroke-width="1"></polyline>`);
+    }
+
+    const pointLabels = projected.flatMap((row) => row.map((point) => `
+      <text x="${point.screenX.toFixed(1)}" y="${(point.screenY - 7).toFixed(1)}" text-anchor="middle" class="surface-value">${escapeHtml(String(point.value))}</text>
+    `)).join("");
+
+    const axisNormal = (anchor, neighbor, scaleFactor = 20) => {
+      const dx = anchor.screenX - neighbor.screenX;
+      const dy = anchor.screenY - neighbor.screenY;
+      const length = Math.hypot(dx, dy) || 1;
+      return {
+        x: (dx / length) * scaleFactor,
+        y: (dy / length) * scaleFactor,
+      };
+    };
+
+    const xAxisPoints = projected[xAxisRowIndex];
+    const xAxisNeighborRow = projected[Math.max(0, Math.min(rows - 1, xAxisRowIndex + (xAxisRowIndex > rows / 2 ? -1 : 1)))];
+    const xAxisLabels = parameter.x_axis.map((label, colIndex) => {
+      const anchor = xAxisPoints[colIndex];
+      const neighbor = xAxisNeighborRow[colIndex] || anchor;
+      const offset = axisNormal(anchor, neighbor, 18);
+      return `<text x="${(anchor.screenX + offset.x).toFixed(1)}" y="${(anchor.screenY + offset.y).toFixed(1)}" text-anchor="middle" class="surface-axis-label">${escapeHtml(String(label))}</text>`;
+    }).join("");
+
+    const yAxisPoints = projected.map((row) => row[yAxisColumnIndex]);
+    const yAxisNeighborColumnIndex = Math.max(0, Math.min(cols - 1, yAxisColumnIndex + (yAxisColumnIndex > cols / 2 ? -1 : 1)));
+    const yAxisLabels = parameter.y_axis.map((label, rowIndex) => {
+      const anchor = yAxisPoints[rowIndex];
+      const neighbor = projected[rowIndex][yAxisNeighborColumnIndex] || anchor;
+      const offset = axisNormal(anchor, neighbor, 24);
+      return `<text x="${(anchor.screenX + offset.x).toFixed(1)}" y="${(anchor.screenY + offset.y + 4).toFixed(1)}" text-anchor="middle" class="surface-axis-label">${escapeHtml(String(label))}</text>`;
+    }).join("");
+
+    const xAxisLine = `<polyline points="${xAxisPoints.map((point) => `${point.screenX.toFixed(1)},${point.screenY.toFixed(1)}`).join(" ")}" fill="none" stroke="rgba(156, 79, 36, 0.72)" stroke-width="2"></polyline>`;
+    const yAxisLine = `<polyline points="${yAxisPoints.map((point) => `${point.screenX.toFixed(1)},${point.screenY.toFixed(1)}`).join(" ")}" fill="none" stroke="rgba(95, 116, 76, 0.78)" stroke-width="2"></polyline>`;
+
+    const xAxisStart = xAxisPoints[0];
+    const xAxisEnd = xAxisPoints[xAxisPoints.length - 1];
+    const xTitleOffset = axisNormal(xAxisEnd, xAxisStart, 26);
+    const xAxisTitle = `
+      <text
+        x="${(xAxisEnd.screenX + xTitleOffset.x).toFixed(1)}"
+        y="${(xAxisEnd.screenY + xTitleOffset.y).toFixed(1)}"
+        text-anchor="start"
+        class="surface-axis-title"
+      >X axis</text>
+    `;
+
+    const yAxisStart = yAxisPoints[0];
+    const yAxisEnd = yAxisPoints[yAxisPoints.length - 1];
+    const yTitleOffset = axisNormal(yAxisEnd, yAxisStart, 28);
+    const yAxisTitle = `
+      <text
+        x="${(yAxisEnd.screenX + yTitleOffset.x).toFixed(1)}"
+        y="${(yAxisEnd.screenY + yTitleOffset.y).toFixed(1)}"
+        text-anchor="middle"
+        class="surface-axis-title"
+      >Y axis</text>
+    `;
+
+    const gradientId = `surfaceBackdrop-${parameter.name.replaceAll(/[^a-zA-Z0-9_-]/g, "_")}`;
+    return `
+      <svg class="surface-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.96)"></stop>
+            <stop offset="100%" stop-color="rgba(236,226,210,0.72)"></stop>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="${width}" height="${height}" rx="22" fill="url(#${gradientId})"></rect>
+        ${polygons}
+        ${meshLines.join("")}
+        ${xAxisLine}
+        ${yAxisLine}
+        ${pointLabels}
+        ${xAxisLabels}
+        ${yAxisLabels}
+        ${xAxisTitle}
+        ${yAxisTitle}
+      </svg>
+    `;
+  };
+
+  const draw = () => {
+    canvas.innerHTML = buildSurfaceMarkup();
+  };
+
+  const clampPitch = (value) => Math.max(0.38, Math.min(1.45, value));
+  const clampZoom = (value) => Math.max(0.7, Math.min(1.75, value));
+
+  let dragState = null;
+
+  const stopDrag = () => {
+    dragState = null;
+    wrapper.classList.remove("surface-dragging");
+  };
+
+  const onPointerMove = (event) => {
+    if (!dragState) {
+      return;
+    }
+    const dx = event.clientX - dragState.startX;
+    const dy = event.clientY - dragState.startY;
+    state.surfaceView.yaw = dragState.startYaw + dx * 0.012;
+    state.surfaceView.pitch = clampPitch(dragState.startPitch + dy * 0.009);
+    draw();
+  };
+
+  stage.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    dragState = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startYaw: state.surfaceView.yaw,
+      startPitch: state.surfaceView.pitch,
+    };
+    wrapper.classList.add("surface-dragging");
+    stage.setPointerCapture?.(event.pointerId);
   });
+
+  stage.addEventListener("pointermove", onPointerMove);
+  stage.addEventListener("pointerup", stopDrag);
+  stage.addEventListener("pointercancel", stopDrag);
+  stage.addEventListener("pointerleave", stopDrag);
+  stage.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.08 : 0.08;
+    state.surfaceView.zoom = clampZoom(state.surfaceView.zoom + delta);
+    draw();
+  }, { passive: false });
+
+  controlButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const { action } = button.dataset;
+      if (action === "yaw-left") {
+        state.surfaceView.yaw -= 0.18;
+      } else if (action === "yaw-right") {
+        state.surfaceView.yaw += 0.18;
+      } else if (action === "pitch-up") {
+        state.surfaceView.pitch = clampPitch(state.surfaceView.pitch - 0.12);
+      } else if (action === "pitch-down") {
+        state.surfaceView.pitch = clampPitch(state.surfaceView.pitch + 0.12);
+      } else if (action === "zoom-in") {
+        state.surfaceView.zoom = clampZoom(state.surfaceView.zoom + 0.1);
+      } else if (action === "zoom-out") {
+        state.surfaceView.zoom = clampZoom(state.surfaceView.zoom - 0.1);
+      }
+      draw();
+    });
+  });
+
+  resetButton.addEventListener("click", () => {
+    state.surfaceView = { yaw: -0.8, pitch: 1.02, zoom: 1 };
+    draw();
+  });
+
+  draw();
   return wrapper;
 }
 
@@ -1891,5 +2254,7 @@ window.addEventListener("beforeunload", (event) => {
 loadFiles();
 loadSamplePath();
 initializeSidebarWidth();
+initializeDetailVisualWidth();
 setupSidebarResizer();
+setupDetailResizer();
 renderAll();
