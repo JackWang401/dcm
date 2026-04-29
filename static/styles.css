@@ -498,6 +498,27 @@ body.is-detail-resizing .detail-resizer::before {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 239, 230, 0.8));
 }
 
+.line-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.line-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.line-chart-legend i {
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
 .surface-view {
   display: flex;
   flex-direction: column;

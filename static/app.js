@@ -767,10 +767,9 @@ function renderCompareOverview() {
 }
 
 function renderButtons() {
-  const issues = collectValidationIssues();
   const hasDocument = Boolean(state.filePath && parameterNames().length);
-  els.saveFile.disabled = !state.filePath || !parameterNames().length || issues.length > 0;
-  els.saveAsFile.disabled = !state.filePath || !parameterNames().length || issues.length > 0;
+  els.saveFile.disabled = !hasDocument;
+  els.saveAsFile.disabled = !hasDocument;
   els.compareFile.disabled = !state.filePath || !parameterNames().length || !els.comparePath.value.trim();
   els.clearCompare.disabled = !state.comparePath;
   els.pickDcmFile.disabled = false;
@@ -984,15 +983,24 @@ function renderVisualization(parameter, original) {
   }
 
   if (parameter.kind === "list" || parameter.kind === "axis" || parameter.kind === "curve") {
-    const xValues = parameter.kind === "curve"
-      ? parameter.x_axis
-      : parameter.kind === "axis"
-        ? parameter.x_axis.map((_, index) => String(index))
-        : parameter.values.map((_, index) => String(index));
-    const yValues = parameter.kind === "axis" ? parameter.x_axis : parameter.values;
-    const chartMarkup = renderLineChart(xValues, yValues);
+    const chartSeries = parameter.kind === "curve"
+      ? [
+          { name: "Original", labels: original.x_axis, values: original.values, color: "#5f744c", dash: "3 2" },
+          { name: "Tuned", labels: parameter.x_axis, values: parameter.values, color: "#9c4f24" },
+        ]
+      : [
+          {
+            name: "Current",
+            labels: parameter.kind === "axis"
+              ? parameter.x_axis.map((_, index) => String(index))
+              : parameter.values.map((_, index) => String(index)),
+            values: parameter.kind === "axis" ? parameter.x_axis : parameter.values,
+            color: "#9c4f24",
+          },
+        ];
+    const chartMarkup = renderLineChart(chartSeries);
     els.visualHint.textContent = parameter.kind === "curve"
-      ? "X-axis vs value curve"
+      ? "Original and tuned X-axis vs value curves"
       : parameter.kind === "axis"
         ? "Axis index vs axis value trend"
         : "Index vs value trend";
@@ -1125,6 +1133,60 @@ function renderComparison(parameter) {
     els.compareSlot.appendChild(table);
     appendMetadataComparison(parameter, baseline);
   }
+}
+
+function syncSelectedEditorInputs() {
+  const parameter = state.current.get(state.selectedName);
+  if (!parameter) {
+    return;
+  }
+
+  if (parameter.kind === "scalar") {
+    const input = els.editorSlot.querySelector("#scalar-input");
+    if (input) {
+      parameter.value = input.value;
+    }
+  }
+
+  if (parameter.kind === "list") {
+    els.editorSlot.querySelectorAll("input[data-index]").forEach((input) => {
+      parameter.values[Number(input.dataset.index)] = input.value;
+    });
+  }
+
+  if (parameter.kind === "axis") {
+    els.editorSlot.querySelectorAll("input[data-axis]").forEach((input) => {
+      parameter.x_axis[Number(input.dataset.axis)] = input.value;
+    });
+  }
+
+  if (parameter.kind === "curve") {
+    els.editorSlot.querySelectorAll("input[data-axis]").forEach((input) => {
+      parameter.x_axis[Number(input.dataset.axis)] = input.value;
+    });
+    els.editorSlot.querySelectorAll("input[data-value]").forEach((input) => {
+      parameter.values[Number(input.dataset.value)] = input.value;
+    });
+  }
+
+  if (parameter.kind === "map") {
+    els.editorSlot.querySelectorAll("input[data-x]").forEach((input) => {
+      parameter.x_axis[Number(input.dataset.x)] = input.value;
+    });
+    els.editorSlot.querySelectorAll("input[data-y]").forEach((input) => {
+      parameter.y_axis[Number(input.dataset.y)] = input.value;
+    });
+    els.editorSlot.querySelectorAll("input[data-row]").forEach((input) => {
+      parameter.map_values[Number(input.dataset.row)][Number(input.dataset.column)] = input.value;
+    });
+  }
+
+  els.editorSlot.querySelectorAll("input[data-metadata-index]").forEach((input) => {
+    const item = parameter.metadata?.[Number(input.dataset.metadataIndex)];
+    if (item) {
+      item.value = input.value;
+    }
+  });
 }
 
 function renderSurface3D(parameter) {
@@ -1421,19 +1483,26 @@ function renderSurface3D(parameter) {
   return wrapper;
 }
 
-function renderLineChart(labels, values) {
-  const numericValues = values.map((value) => Number(value));
-  if (numericValues.some(Number.isNaN)) {
+function renderLineChart(seriesList) {
+  const series = seriesList.map((item) => ({
+    ...item,
+    numericValues: item.values.map((value) => Number(value)),
+    numericLabels: item.labels.map((label) => Number(label)),
+  }));
+  const allYValues = series.flatMap((item) => item.numericValues);
+  const allXLabels = series.flatMap((item) => item.numericLabels);
+  const hasNumericValues = allYValues.length > 0 && series.every((item) => item.numericValues.every((value) => !Number.isNaN(value)));
+  if (!hasNumericValues) {
     return '<p class="muted">Chart is available only when every value is numeric.</p>';
   }
-  const numericLabels = labels.map((label) => Number(label));
-  const useNumericX = numericLabels.every((value) => !Number.isNaN(value));
+  const useNumericX = allXLabels.length > 0 && series.every((item) => item.numericLabels.every((value) => !Number.isNaN(value)));
 
-  const min = Math.min(...numericValues);
-  const max = Math.max(...numericValues);
+  const min = Math.min(...allYValues);
+  const max = Math.max(...allYValues);
   const range = max - min || 1;
-  const xMin = useNumericX ? Math.min(...numericLabels) : 0;
-  const xMax = useNumericX ? Math.max(...numericLabels) : Math.max(labels.length - 1, 1);
+  const maxPointCount = Math.max(...series.map((item) => item.values.length), 1);
+  const xMin = useNumericX ? Math.min(...allXLabels) : 0;
+  const xMax = useNumericX ? Math.max(...allXLabels) : Math.max(maxPointCount - 1, 1);
   const xRange = xMax - xMin || 1;
   const chartLeft = 12;
   const chartRight = 94;
@@ -1447,14 +1516,16 @@ function renderLineChart(labels, values) {
     return value.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
   };
 
-  const pointsData = numericValues.map((value, index) => {
-    const xValue = useNumericX ? numericLabels[index] : index;
-    const x = chartLeft + ((xValue - xMin) / xRange) * (chartRight - chartLeft);
-    const y = chartBottom - ((value - min) / range) * (chartBottom - chartTop);
-    return { x, y, value, label: labels[index], xValue };
+  const seriesPoints = series.map((item) => {
+    const pointsData = item.numericValues.map((value, index) => {
+      const xValue = useNumericX ? item.numericLabels[index] : index;
+      const x = chartLeft + ((xValue - xMin) / xRange) * (chartRight - chartLeft);
+      const y = chartBottom - ((value - min) / range) * (chartBottom - chartTop);
+      return { x, y, value, label: item.labels[index], xValue };
+    });
+    return { ...item, pointsData };
   });
 
-  const points = pointsData.map(({ x, y }) => `${x},${y}`).join(" ");
   const yTicks = Array.from({ length: tickCount }, (_, index) => {
     const ratio = index / Math.max(tickCount - 1, 1);
     const y = chartBottom - ratio * (chartBottom - chartTop);
@@ -1467,30 +1538,45 @@ function renderLineChart(labels, values) {
     `;
   }).join("");
 
-  const xTicks = pointsData.map(({ x, label }) => `
+  const xTickPoints = seriesPoints[seriesPoints.length - 1]?.pointsData || [];
+  const xTicks = xTickPoints.map(({ x, label }) => `
     <g>
       <line x1="${x}" y1="${chartBottom}" x2="${x}" y2="${chartBottom + 2.2}" stroke="rgba(117, 98, 81, 0.34)" stroke-width="0.45"></line>
       <text x="${x}" y="${chartBottom + 6.2}" text-anchor="middle" font-size="2.8" fill="#756251">${escapeHtml(String(label))}</text>
     </g>
   `).join("");
 
-  const dots = pointsData.map(({ x, y, value }) => `
-    <circle cx="${x}" cy="${y}" r="2.6" fill="#9c4f24"></circle>
-    <text x="${x}" y="${y - 4.4}" text-anchor="middle" font-size="3" fill="#756251">${escapeHtml(formatTick(value))}</text>
-  `).join("");
+  const seriesMarkup = seriesPoints.map((item, seriesIndex) => {
+    const points = item.pointsData.map(({ x, y }) => `${x},${y}`).join(" ");
+    const dash = item.dash ? ` stroke-dasharray="${escapeHtml(item.dash)}"` : "";
+    const dots = item.pointsData.map(({ x, y, value }) => `
+      <circle cx="${x}" cy="${y}" r="2.4" fill="${escapeHtml(item.color)}"></circle>
+      ${seriesIndex === seriesPoints.length - 1 ? `<text x="${x}" y="${y - 4.4}" text-anchor="middle" font-size="3" fill="#756251">${escapeHtml(formatTick(value))}</text>` : ""}
+    `).join("");
+    return `
+      <polyline fill="none" stroke="${escapeHtml(item.color)}" stroke-width="1.4"${dash} points="${points}"></polyline>
+      ${dots}
+    `;
+  }).join("");
+
+  const legend = seriesPoints.length > 1
+    ? `<div class="line-chart-legend">${seriesPoints.map((item) => `
+        <span><i style="background:${escapeHtml(item.color)}"></i>${escapeHtml(item.name)}</span>
+      `).join("")}</div>`
+    : "";
 
   return `
+    ${legend}
     <svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
-      <rect x="0" y="0" width="100" height="100" fill="transparent"></rect>
-      ${yTicks}
-      <line x1="${chartLeft}" y1="${chartBottom}" x2="${chartRight}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
-      <line x1="${chartLeft}" y1="${chartTop}" x2="${chartLeft}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
-      <polyline fill="none" stroke="#9c4f24" stroke-width="1.4" points="${points}"></polyline>
-      ${xTicks}
-      ${dots}
-      <text x="${chartRight}" y="96" text-anchor="end" font-size="2.8" fill="#756251">X axis</text>
-      <text x="2.8" y="${chartTop}" text-anchor="start" font-size="2.8" fill="#756251">Y axis</text>
-    </svg>
+        <rect x="0" y="0" width="100" height="100" fill="transparent"></rect>
+        ${yTicks}
+        <line x1="${chartLeft}" y1="${chartBottom}" x2="${chartRight}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
+        <line x1="${chartLeft}" y1="${chartTop}" x2="${chartLeft}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
+        ${seriesMarkup}
+        ${xTicks}
+        <text x="${chartRight}" y="96" text-anchor="end" font-size="2.8" fill="#756251">X axis</text>
+        <text x="2.8" y="${chartTop}" text-anchor="start" font-size="2.8" fill="#756251">Y axis</text>
+      </svg>
   `;
 }
 
@@ -2150,6 +2236,8 @@ async function saveDocument() {
 }
 
 async function saveDocumentToPath(outputPath = null) {
+  syncSelectedEditorInputs();
+
   if (!state.filePath || !parameterNames().length) {
     showStatus("Load a DCM file before saving.", "error");
     return;
