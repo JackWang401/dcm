@@ -47,6 +47,29 @@ FESTKENNFELD BOOST_LIMIT 2 3
 END
 """
 
+ACTUAL_STYLE_TEXT = """KONSERVIERUNG_FORMAT 2.0
+
+FUNKTIONEN
+   FKT CGF "" ""
+END
+
+FESTWERT NDAS.Active_Safety.2400.CPM_C_Encoded_Direction
+   LANGNAME ""
+   DISPLAYNAME componentParameters##cpmComfortEncodedDirection
+   FUNKTION CGF
+   EINHEIT_W "enum"
+   TEXT   "2_2u"
+END
+
+FESTWERT NDAS.Active_Safety.2402.CPM_C_Target_Remaining_Distance
+   LANGNAME ""
+   DISPLAYNAME componentParameters##nfaDAAoffsetToStoppingDist
+   FUNKTION CGF
+   EINHEIT_W "float32_t"
+   WERT   0.2
+END
+"""
+
 
 class DcmParserTests(unittest.TestCase):
     def test_parse_supported_blocks(self) -> None:
@@ -171,6 +194,68 @@ class DcmParserTests(unittest.TestCase):
 
         self.assertIn("STUETZSTELLENVERTEILUNG SPEED_AXIS 5", rendered)
         self.assertIn("ST/X 0 20 45 60 80", rendered)
+
+    def test_actual_style_text_scalar_round_trips_as_value(self) -> None:
+        document = DcmDocument.from_text(ACTUAL_STYLE_TEXT)
+        payloads = [parameter.to_payload() for parameter in document.parameters]
+
+        self.assertEqual(payloads[0]["value_prefix"], "TEXT")
+        self.assertEqual(payloads[0]["value"], '"2_2u"')
+        self.assertEqual(document.collect_validation_issues(), [])
+
+        payloads[0]["value"] = '"3_3u"'
+        document.apply_payloads(payloads)
+        rendered = document.render_text()
+
+        self.assertIn('TEXT   "3_3u"', rendered)
+        self.assertIn("DISPLAYNAME componentParameters##cpmComfortEncodedDirection", rendered)
+        self.assertIn('EINHEIT_W "enum"', rendered)
+
+    def test_delete_removes_complete_actual_style_block(self) -> None:
+        document = DcmDocument.from_text(ACTUAL_STYLE_TEXT)
+        payloads = [
+            parameter.to_payload()
+            for parameter in document.parameters
+            if parameter.name != "NDAS.Active_Safety.2400.CPM_C_Encoded_Direction"
+        ]
+
+        document.apply_payloads(payloads)
+        rendered = document.render_text()
+
+        self.assertNotIn("NDAS.Active_Safety.2400.CPM_C_Encoded_Direction", rendered)
+        self.assertNotIn("componentParameters##cpmComfortEncodedDirection", rendered)
+        self.assertNotIn('EINHEIT_W "enum"', rendered)
+        self.assertNotIn('TEXT   "2_2u"', rendered)
+        self.assertIn("FUNKTIONEN", rendered)
+        self.assertIn("NDAS.Active_Safety.2402.CPM_C_Target_Remaining_Distance", rendered)
+
+    def test_add_renders_complete_actual_style_scalar_block(self) -> None:
+        document = DcmDocument.from_text(ACTUAL_STYLE_TEXT)
+        payloads = [parameter.to_payload() for parameter in document.parameters]
+        payloads.append(
+            {
+                "name": "NDAS.Active_Safety.9999.New_Enum",
+                "keyword": "FESTWERT",
+                "kind": "scalar",
+                "metadata": [
+                    {"key": "LANGNAME", "value": '""'},
+                    {"key": "DISPLAYNAME", "value": "componentParameters##newEnum"},
+                    {"key": "FUNKTION", "value": "CGF"},
+                    {"key": "EINHEIT_W", "value": '"enum"'},
+                ],
+                "value_prefix": "TEXT",
+                "value": '"0_0u"',
+            }
+        )
+
+        document.apply_payloads(payloads)
+        rendered = document.render_text()
+
+        self.assertIn("FESTWERT NDAS.Active_Safety.9999.New_Enum", rendered)
+        self.assertIn("DISPLAYNAME componentParameters##newEnum", rendered)
+        self.assertIn("FUNKTION CGF", rendered)
+        self.assertIn('EINHEIT_W "enum"', rendered)
+        self.assertIn('TEXT "0_0u"', rendered)
 
 
 if __name__ == "__main__":

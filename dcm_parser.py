@@ -59,6 +59,7 @@ class ParameterBlock:
     body_items: list[BodyItem]
     header_suffix: str = ""
     scalar_value: str | None = None
+    scalar_value_prefix: str = "WERT"
     values: list[str] | None = None
     x_axis: list[str] | None = None
     y_axis: list[str] | None = None
@@ -98,7 +99,7 @@ class ParameterBlock:
             prefix, spacing, remainder = _split_line_parts(raw_line)
             tokens = remainder.split()
 
-            if kind == "scalar" and prefix == "WERT":
+            if kind == "scalar" and prefix in {"WERT", "TEXT"}:
                 scalar_value = " ".join(tokens)
                 body_items.append(
                     BodyItem(
@@ -163,6 +164,10 @@ class ParameterBlock:
             footer_line=lines[-1],
             body_items=body_items,
             scalar_value=scalar_value,
+            scalar_value_prefix=next(
+                (item.prefix for item in body_items if item.kind == "scalar"),
+                "WERT",
+            ),
             values=values or None,
             x_axis=x_axis or None,
             y_axis=y_axis or None,
@@ -185,6 +190,7 @@ class ParameterBlock:
         }
         if self.kind == "scalar":
             payload["value"] = self.scalar_value or ""
+            payload["value_prefix"] = self.scalar_value_prefix
         if self.kind in {"list", "curve"}:
             payload["values"] = list(self.values or [])
         if self.kind in {"axis", "curve", "map"}:
@@ -203,7 +209,11 @@ class ParameterBlock:
 
         if self.kind == "scalar":
             next_value = str(payload.get("value", ""))
+            next_value_prefix = str(payload.get("value_prefix") or self.scalar_value_prefix).strip()
+            if next_value_prefix not in {"WERT", "TEXT"}:
+                raise ValidationError(f"{self.name}.value_prefix must be WERT or TEXT")
             self.scalar_value = next_value
+            self.scalar_value_prefix = next_value_prefix
             return
 
         if self.kind == "list":
@@ -280,7 +290,7 @@ class ParameterBlock:
                 continue
 
             if item.kind == "scalar":
-                rendered.append(_format_line(item.indent, item.prefix, [self.scalar_value or ""], item.spacing))
+                rendered.append(_format_line(item.indent, self.scalar_value_prefix, [self.scalar_value or ""], item.spacing))
                 continue
 
             if item.kind == "values":
@@ -361,8 +371,16 @@ def _parameter_lines_from_payload(payload: dict[str, Any]) -> list[str]:
         if key:
             lines.append(_format_metadata_line("  ", key, value))
 
+    for raw_line in payload.get("raw_lines") or []:
+        raw_text = str(raw_line)
+        if raw_text.strip():
+            lines.append(raw_text)
+
     if kind == "scalar":
-        lines.append(_format_line("  ", "WERT", [str(payload.get("value", "0"))]))
+        value_prefix = str(payload.get("value_prefix") or "WERT").strip()
+        if value_prefix not in {"WERT", "TEXT"}:
+            raise ValidationError(f"{name}.value_prefix must be WERT or TEXT")
+        lines.append(_format_line("  ", value_prefix, [str(payload.get("value", "0"))]))
     elif kind == "list":
         lines.append(_format_line("  ", "WERT", [str(item) for item in payload.get("values") or ["0"]]))
     elif kind == "axis":
@@ -445,12 +463,17 @@ class DcmDocument:
     def apply_payloads(self, payloads: list[dict[str, Any]]) -> None:
         trailing_newline = self.trailing_newline
         original_by_name = {parameter.name: parameter for parameter in self.parameters}
-        payload_by_name = {str(payload.get("name", "")).strip(): payload for payload in payloads}
+        payload_by_name: dict[str, dict[str, Any]] = {}
         rendered_lines: list[str] = []
         cursor = 0
 
-        if "" in payload_by_name:
-            raise ValidationError("Parameter name is required")
+        for payload in payloads:
+            name = str(payload.get("name", "")).strip()
+            if not name:
+                raise ValidationError("Parameter name is required")
+            if name in payload_by_name:
+                raise ValidationError(f"Duplicate parameter payload: {name}")
+            payload_by_name[name] = payload
 
         for original in self.parameters:
             rendered_lines.extend(self.lines[cursor : original.start_line])

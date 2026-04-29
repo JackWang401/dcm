@@ -2458,7 +2458,7 @@ function normalizeParameterName(name) {
   return name.trim().replaceAll(/\s+/g, "_").replaceAll(/[^A-Za-z0-9_.-]/g, "_");
 }
 
-function createNewParameterPayload(name, kind) {
+function createNewParameterPayload(name, kind, options = {}) {
   const keywordByKind = {
     scalar: "FESTWERT",
     list: "FESTWERTEBLOCK",
@@ -2471,12 +2471,18 @@ function createNewParameterPayload(name, kind) {
     keyword: keywordByKind[kind],
     kind,
     header_suffix: "",
-    metadata: [{ key: "LANGNAME", value: `"${name}"` }],
+    metadata: [
+      { key: "LANGNAME", value: '""' },
+      { key: "DISPLAYNAME", value: options.displayName || name },
+      { key: "FUNKTION", value: options.functionName || "CGF" },
+      { key: "EINHEIT_W", value: options.unit || '"float32_t"' },
+    ],
     raw_lines: [],
     line_range: { start: 0, end: 0 },
   };
   if (kind === "scalar") {
-    payload.value = "0";
+    payload.value_prefix = options.valuePrefix || "WERT";
+    payload.value = options.initialValue || (payload.value_prefix === "TEXT" ? '""' : "0");
   } else if (kind === "list") {
     payload.values = ["0", "0", "0"];
   } else if (kind === "axis") {
@@ -2519,9 +2525,36 @@ function addParameter() {
     showStatus("Parameter kind must be scalar, list, axis, curve, or map.", "error");
     return;
   }
+  const options = {};
+  if (kind === "scalar") {
+    const rawUnit = window.prompt("Unit/type metadata (EINHEIT_W):", '"float32_t"');
+    if (rawUnit === null) {
+      return;
+    }
+    options.unit = rawUnit.trim() || '"float32_t"';
+    const rawValuePrefix = window.prompt("Value line keyword: WERT or TEXT", options.unit === '"enum"' ? "TEXT" : "WERT");
+    if (!rawValuePrefix) {
+      return;
+    }
+    options.valuePrefix = rawValuePrefix.trim().toUpperCase();
+    if (!["WERT", "TEXT"].includes(options.valuePrefix)) {
+      showStatus("Scalar value line keyword must be WERT or TEXT.", "error");
+      return;
+    }
+    const rawInitialValue = window.prompt("Initial value:", options.valuePrefix === "TEXT" ? '""' : "0");
+    if (rawInitialValue === null) {
+      return;
+    }
+    options.initialValue = rawInitialValue;
+  }
+  const rawDisplayName = window.prompt("DISPLAYNAME metadata:", `componentParameters##${name}`);
+  if (rawDisplayName === null) {
+    return;
+  }
+  options.displayName = rawDisplayName.trim() || name;
 
   commitChange(() => {
-    state.current.set(name, createNewParameterPayload(name, kind));
+    state.current.set(name, createNewParameterPayload(name, kind, options));
     state.selectedName = name;
   }, `Added ${name}`);
 }
