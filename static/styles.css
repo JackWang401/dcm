@@ -13,6 +13,7 @@
   --radius: 22px;
   --sidebar-width: 290px;
   --detail-visual-width: 360px;
+  --detail-pane-height: 560px;
 }
 
 html,
@@ -438,12 +439,18 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) 10px minmax(260px, var(--detail-visual-width));
   gap: 12px;
   align-items: stretch;
+  height: var(--detail-pane-height);
+  min-height: 320px;
+}
+
+.detail-grid > .panel {
+  min-height: 0;
+  overflow: auto;
 }
 
 .visual-panel {
   display: flex;
   flex-direction: column;
-  min-height: 320px;
 }
 
 #visual-slot {
@@ -480,6 +487,32 @@ button:disabled {
 .detail-resizer:hover::before,
 .detail-resizer:focus-visible::before,
 body.is-detail-resizing .detail-resizer::before {
+  background: var(--accent);
+}
+
+.detail-height-resizer {
+  position: relative;
+  min-height: 14px;
+  cursor: row-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.detail-height-resizer::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(110, 76, 45, 0.24);
+}
+
+.detail-height-resizer:hover::before,
+.detail-height-resizer:focus-visible::before,
+body.is-detail-height-resizing .detail-height-resizer::before {
   background: var(--accent);
 }
 

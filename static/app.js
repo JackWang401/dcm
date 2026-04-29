@@ -7,6 +7,10 @@ const DETAIL_VISUAL_WIDTH_KEY = "dcm-editor-detail-visual-width";
 const DEFAULT_DETAIL_VISUAL_WIDTH = 360;
 const MIN_DETAIL_VISUAL_WIDTH = 260;
 const MAX_DETAIL_VISUAL_WIDTH = 760;
+const DETAIL_PANE_HEIGHT_KEY = "dcm-editor-detail-pane-height";
+const DEFAULT_DETAIL_PANE_HEIGHT = 560;
+const MIN_DETAIL_PANE_HEIGHT = 320;
+const MAX_DETAIL_PANE_HEIGHT = 1100;
 
 const state = {
   filePath: "",
@@ -34,6 +38,7 @@ const els = {
   filePath: document.querySelector("#file-path"),
   sidebarResizer: document.querySelector("#sidebar-resizer"),
   detailResizer: document.querySelector("#detail-resizer"),
+  detailHeightResizer: document.querySelector("#detail-height-resizer"),
   dcmFileInput: document.querySelector("#dcm-file-input"),
   pickDcmFile: document.querySelector("#pick-dcm-file"),
   comparePath: document.querySelector("#compare-path"),
@@ -116,6 +121,10 @@ function clampDetailVisualWidth(width) {
   return Math.max(MIN_DETAIL_VISUAL_WIDTH, Math.min(MAX_DETAIL_VISUAL_WIDTH, width));
 }
 
+function clampDetailPaneHeight(height) {
+  return Math.max(MIN_DETAIL_PANE_HEIGHT, Math.min(MAX_DETAIL_PANE_HEIGHT, height));
+}
+
 function applySidebarWidth(width, persist = true) {
   const normalizedWidth = clampSidebarWidth(width);
   document.documentElement.style.setProperty("--sidebar-width", `${normalizedWidth}px`);
@@ -129,6 +138,14 @@ function applyDetailVisualWidth(width, persist = true) {
   document.documentElement.style.setProperty("--detail-visual-width", `${normalizedWidth}px`);
   if (persist) {
     window.localStorage.setItem(DETAIL_VISUAL_WIDTH_KEY, String(normalizedWidth));
+  }
+}
+
+function applyDetailPaneHeight(height, persist = true) {
+  const normalizedHeight = clampDetailPaneHeight(height);
+  document.documentElement.style.setProperty("--detail-pane-height", `${normalizedHeight}px`);
+  if (persist) {
+    window.localStorage.setItem(DETAIL_PANE_HEIGHT_KEY, String(normalizedHeight));
   }
 }
 
@@ -148,6 +165,15 @@ function initializeDetailVisualWidth() {
     return;
   }
   applyDetailVisualWidth(DEFAULT_DETAIL_VISUAL_WIDTH, false);
+}
+
+function initializeDetailPaneHeight() {
+  const storedHeight = Number(window.localStorage.getItem(DETAIL_PANE_HEIGHT_KEY));
+  if (Number.isFinite(storedHeight)) {
+    applyDetailPaneHeight(storedHeight, false);
+    return;
+  }
+  applyDetailPaneHeight(DEFAULT_DETAIL_PANE_HEIGHT, false);
 }
 
 function setupSidebarResizer() {
@@ -277,6 +303,68 @@ function setupDetailResizer() {
 
   els.detailResizer.addEventListener("dblclick", () => {
     applyDetailVisualWidth(DEFAULT_DETAIL_VISUAL_WIDTH, true);
+  });
+}
+
+function setupDetailHeightResizer() {
+  if (!els.detailHeightResizer) {
+    return;
+  }
+
+  const startResize = (startY) => {
+    const startHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-height"))
+      || DEFAULT_DETAIL_PANE_HEIGHT;
+
+    const handleMove = (clientY) => {
+      const nextHeight = startHeight + (clientY - startY);
+      applyDetailPaneHeight(nextHeight, false);
+    };
+
+    const onPointerMove = (event) => {
+      handleMove(event.clientY);
+    };
+
+    const stopResize = () => {
+      document.body.classList.remove("is-detail-height-resizing");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      const height = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-height"));
+      applyDetailPaneHeight(height, true);
+    };
+
+    document.body.classList.add("is-detail-height-resizing");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  };
+
+  els.detailHeightResizer.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    els.detailHeightResizer.setPointerCapture?.(event.pointerId);
+    startResize(event.clientY);
+  });
+
+  els.detailHeightResizer.addEventListener("keydown", (event) => {
+    const currentHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-height"))
+      || DEFAULT_DETAIL_PANE_HEIGHT;
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      applyDetailPaneHeight(currentHeight - 24, true);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      applyDetailPaneHeight(currentHeight + 24, true);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyDetailPaneHeight(MIN_DETAIL_PANE_HEIGHT, true);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyDetailPaneHeight(MAX_DETAIL_PANE_HEIGHT, true);
+    }
+  });
+
+  els.detailHeightResizer.addEventListener("dblclick", () => {
+    applyDetailPaneHeight(DEFAULT_DETAIL_PANE_HEIGHT, true);
   });
 }
 
@@ -997,27 +1085,33 @@ function renderVisualization(parameter, original) {
   }
 
   if (parameter.kind === "list" || parameter.kind === "axis" || parameter.kind === "curve") {
-    const chartSeries = parameter.kind === "curve"
+    const currentLabels = parameter.kind === "curve"
+      ? parameter.x_axis
+      : parameter.kind === "axis"
+        ? parameter.x_axis.map((_, index) => String(index))
+        : parameter.values.map((_, index) => String(index));
+    const currentValues = parameter.kind === "axis" ? parameter.x_axis : parameter.values;
+    const originalLabels = parameter.kind === "curve"
+      ? original.x_axis
+      : parameter.kind === "axis"
+        ? original.x_axis.map((_, index) => String(index))
+        : original.values.map((_, index) => String(index));
+    const originalValues = parameter.kind === "axis" ? original.x_axis : original.values;
+    const diff = diffParameter(parameter, original);
+    const chartSeries = diff.changed
       ? [
-          { name: "Original", labels: original.x_axis, values: original.values, color: "#5f744c", dash: "3 2" },
-          { name: "Tuned", labels: parameter.x_axis, values: parameter.values, color: "#9c4f24" },
+          { name: "Original", labels: originalLabels, values: originalValues, color: "#5f744c", dash: "3 2" },
+          { name: "Tuned", labels: currentLabels, values: currentValues, color: "#9c4f24" },
         ]
       : [
-          {
-            name: "Current",
-            labels: parameter.kind === "axis"
-              ? parameter.x_axis.map((_, index) => String(index))
-              : parameter.values.map((_, index) => String(index)),
-            values: parameter.kind === "axis" ? parameter.x_axis : parameter.values,
-            color: "#9c4f24",
-          },
+          { name: "Current", labels: currentLabels, values: currentValues, color: "#9c4f24" },
         ];
     const chartMarkup = renderLineChart(chartSeries);
     els.visualHint.textContent = parameter.kind === "curve"
       ? "Original and tuned X-axis vs value curves"
       : parameter.kind === "axis"
-        ? "Axis index vs axis value trend"
-        : "Index vs value trend";
+        ? diff.changed ? "Original and tuned axis index vs axis value trends" : "Axis index vs axis value trend"
+        : diff.changed ? "Original and tuned index vs value trends" : "Index vs value trend";
     els.visualSlot.innerHTML = `<div class="viz-wrapper">${chartMarkup}</div>`;
     return;
   }
@@ -2394,6 +2488,8 @@ loadFiles();
 loadSamplePath();
 initializeSidebarWidth();
 initializeDetailVisualWidth();
+initializeDetailPaneHeight();
 setupSidebarResizer();
 setupDetailResizer();
+setupDetailHeightResizer();
 renderAll();
