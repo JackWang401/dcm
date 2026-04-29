@@ -644,19 +644,6 @@ function renderAll() {
   renderButtons();
 }
 
-function revealDetailPanel() {
-  if (!els.detailView || els.detailView.classList.contains("hidden")) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    els.detailView.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-      inline: "nearest",
-    });
-  });
-}
-
 function renderFiles() {
   if (!state.files.length) {
     els.fileList.innerHTML = '<p class="muted">No `.dcm` files found under this workspace.</p>';
@@ -678,6 +665,7 @@ function renderFiles() {
 }
 
 function renderParameterList() {
+  const previousScrollTop = els.parameterList.scrollTop;
   const search = els.parameterSearch.value.trim().toLowerCase();
   const names = parameterNames().filter((name) => name.toLowerCase().includes(search));
   els.parameterCount.textContent = String(names.length);
@@ -689,19 +677,45 @@ function renderParameterList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "parameter-item";
+    button.dataset.name = name;
     if (state.selectedName === name) {
       button.classList.add("active");
     }
     if (diff.changed) {
       button.classList.add("changed");
     }
-    button.innerHTML = `<strong>${name}</strong><br><span class="muted">${parameter.kind}</span>`;
+    button.innerHTML = `<strong>${name}</strong>`;
     button.addEventListener("click", () => {
       state.selectedName = name;
-      renderAll();
-      revealDetailPanel();
+      updateParameterSelection();
+      renderSummary();
+      renderDetail();
+      renderButtons();
+      revealDetailInMainPane();
     });
     els.parameterList.appendChild(button);
+  });
+  els.parameterList.scrollTop = previousScrollTop;
+}
+
+function revealDetailInMainPane() {
+  if (!els.main || !els.detailView || els.detailView.classList.contains("hidden")) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const parameterListScrollTop = els.parameterList.scrollTop;
+    const target = els.detailView.querySelector(".detail-grid") || els.detailView;
+    const mainRect = els.main.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top = targetRect.top - mainRect.top + els.main.scrollTop - 8;
+    els.main.scrollTop = Math.max(0, top);
+    els.parameterList.scrollTop = parameterListScrollTop;
+  });
+}
+
+function updateParameterSelection() {
+  els.parameterList.querySelectorAll(".parameter-item").forEach((button) => {
+    button.classList.toggle("active", button.dataset.name === state.selectedName);
   });
 }
 
