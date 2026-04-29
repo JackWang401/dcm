@@ -1426,29 +1426,70 @@ function renderLineChart(labels, values) {
   if (numericValues.some(Number.isNaN)) {
     return '<p class="muted">Chart is available only when every value is numeric.</p>';
   }
+  const numericLabels = labels.map((label) => Number(label));
+  const useNumericX = numericLabels.every((value) => !Number.isNaN(value));
 
   const min = Math.min(...numericValues);
   const max = Math.max(...numericValues);
   const range = max - min || 1;
-  const points = numericValues.map((value, index) => {
-    const x = (index / Math.max(numericValues.length - 1, 1)) * 100;
-    const y = 90 - ((value - min) / range) * 70;
-    return `${x},${y}`;
-  }).join(" ");
+  const xMin = useNumericX ? Math.min(...numericLabels) : 0;
+  const xMax = useNumericX ? Math.max(...numericLabels) : Math.max(labels.length - 1, 1);
+  const xRange = xMax - xMin || 1;
+  const chartLeft = 12;
+  const chartRight = 94;
+  const chartTop = 12;
+  const chartBottom = 82;
+  const tickCount = 5;
+  const formatTick = (value) => {
+    if (Math.abs(value) >= 1000 || Number.isInteger(value)) {
+      return String(Math.round(value * 1000) / 1000).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+    }
+    return value.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  };
 
-  const dots = numericValues.map((value, index) => {
-    const x = (index / Math.max(numericValues.length - 1, 1)) * 100;
-    const y = 90 - ((value - min) / range) * 70;
-    return `<circle cx="${x}" cy="${y}" r="2.8" fill="#9c4f24"></circle><text x="${x}" y="${y - 6}" text-anchor="middle" font-size="3" fill="#756251">${escapeHtml(labels[index])}</text>`;
+  const pointsData = numericValues.map((value, index) => {
+    const xValue = useNumericX ? numericLabels[index] : index;
+    const x = chartLeft + ((xValue - xMin) / xRange) * (chartRight - chartLeft);
+    const y = chartBottom - ((value - min) / range) * (chartBottom - chartTop);
+    return { x, y, value, label: labels[index], xValue };
+  });
+
+  const points = pointsData.map(({ x, y }) => `${x},${y}`).join(" ");
+  const yTicks = Array.from({ length: tickCount }, (_, index) => {
+    const ratio = index / Math.max(tickCount - 1, 1);
+    const y = chartBottom - ratio * (chartBottom - chartTop);
+    const value = min + ratio * range;
+    return `
+      <g>
+        <line x1="${chartLeft}" y1="${y}" x2="${chartRight}" y2="${y}" stroke="rgba(117, 98, 81, 0.14)" stroke-width="0.5"></line>
+        <text x="${chartLeft - 2}" y="${y + 1.5}" text-anchor="end" font-size="3" fill="#756251">${escapeHtml(formatTick(value))}</text>
+      </g>
+    `;
   }).join("");
+
+  const xTicks = pointsData.map(({ x, label }) => `
+    <g>
+      <line x1="${x}" y1="${chartBottom}" x2="${x}" y2="${chartBottom + 2.2}" stroke="rgba(117, 98, 81, 0.34)" stroke-width="0.45"></line>
+      <text x="${x}" y="${chartBottom + 6.2}" text-anchor="middle" font-size="2.8" fill="#756251">${escapeHtml(String(label))}</text>
+    </g>
+  `).join("");
+
+  const dots = pointsData.map(({ x, y, value }) => `
+    <circle cx="${x}" cy="${y}" r="2.6" fill="#9c4f24"></circle>
+    <text x="${x}" y="${y - 4.4}" text-anchor="middle" font-size="3" fill="#756251">${escapeHtml(formatTick(value))}</text>
+  `).join("");
 
   return `
     <svg class="line-chart" viewBox="0 0 100 100" preserveAspectRatio="none">
       <rect x="0" y="0" width="100" height="100" fill="transparent"></rect>
-      <line x1="5" y1="90" x2="95" y2="90" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
-      <line x1="5" y1="15" x2="5" y2="90" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
+      ${yTicks}
+      <line x1="${chartLeft}" y1="${chartBottom}" x2="${chartRight}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
+      <line x1="${chartLeft}" y1="${chartTop}" x2="${chartLeft}" y2="${chartBottom}" stroke="rgba(117, 98, 81, 0.4)" stroke-width="0.6"></line>
       <polyline fill="none" stroke="#9c4f24" stroke-width="1.4" points="${points}"></polyline>
+      ${xTicks}
       ${dots}
+      <text x="${chartRight}" y="96" text-anchor="end" font-size="2.8" fill="#756251">X axis</text>
+      <text x="2.8" y="${chartTop}" text-anchor="start" font-size="2.8" fill="#756251">Y axis</text>
     </svg>
   `;
 }
