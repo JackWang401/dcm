@@ -41,7 +41,15 @@ class AppState:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
         document = DcmDocument.from_file(path)
-        return document.to_payload()
+        payload = document.to_payload()
+        payload["source_mode"] = "filesystem"
+        return payload
+
+    def load_document_text(self, display_name: str, text: str) -> dict:
+        document = DcmDocument.from_text(text, display_name or "<uploaded>")
+        payload = document.to_payload()
+        payload["source_mode"] = "upload"
+        return payload
 
     def save_document(
         self,
@@ -77,10 +85,49 @@ class AppState:
             "source_hash": sha256(new_text.encode("utf-8")).hexdigest(),
             "validation_issues": document.collect_validation_issues(),
             "source_path": str(source_path),
+            "source_mode": "filesystem",
+        }
+
+    def save_document_text(self, display_name: str, source_text: str, parameters: list[dict], output_path: str) -> dict:
+        if not output_path:
+            raise ValidationError("An output path is required when saving a file opened from the HTML file picker.")
+
+        document = DcmDocument.from_text(source_text, display_name or "<uploaded>")
+        document.apply_payloads(parameters)
+        new_text = document.render_text()
+
+        target_path = self.resolve_path(output_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        backup_path: Path | None = None
+        if target_path.exists():
+            backup_path = target_path.with_suffix(target_path.suffix + f".{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak")
+            shutil.copy2(target_path, backup_path)
+        target_path.write_text(new_text, encoding="utf-8")
+
+        return {
+            "path": str(target_path),
+            "backup_path": str(backup_path) if backup_path else None,
+            "source_hash": sha256(new_text.encode("utf-8")).hexdigest(),
+            "validation_issues": document.collect_validation_issues(),
+            "source_path": str(target_path),
+            "source_mode": "filesystem",
         }
 
     def compare_document(self, current_path: str, parameters: list[dict], compare_path: str) -> dict:
         current_document = DcmDocument.from_file(self.resolve_path(current_path))
+        current_document.apply_payloads(parameters)
+        baseline_document = DcmDocument.from_file(self.resolve_path(compare_path))
+        comparison = current_document.compare_to(baseline_document)
+        return {
+            "compare_path": str(self.resolve_path(compare_path)),
+            "parameters": [parameter.to_payload() for parameter in baseline_document.parameters],
+            "validation_issues": baseline_document.collect_validation_issues(),
+            **comparison,
+        }
+
+    def compare_document_text(self, source_text: str, parameters: list[dict], compare_path: str, display_name: str = "<uploaded>") -> dict:
+        current_document = DcmDocument.from_text(source_text, display_name)
         current_document.apply_payloads(parameters)
         baseline_document = DcmDocument.from_file(self.resolve_path(compare_path))
         comparison = current_document.compare_to(baseline_document)
@@ -124,6 +171,11 @@ class DcmRequestHandler(BaseHTTPRequestHandler):
                 path = payload.get("path", "")
                 self._send_json(self.state.load_document(path))
                 return
+            if parsed.path == "/api/load-text":
+                display_name = payload.get("display_name", "")
+                text = payload.get("text", "")
+                self._send_json(self.state.load_document_text(display_name, text))
+                return
             if parsed.path == "/api/save":
                 path = payload.get("path", "")
                 source_hash = payload.get("source_hash", "")
@@ -132,11 +184,27 @@ class DcmRequestHandler(BaseHTTPRequestHandler):
                 result = self.state.save_document(path, source_hash, parameters, output_path=output_path)
                 self._send_json(result)
                 return
+            if parsed.path == "/api/save-text":
+                display_name = payload.get("display_name", "")
+                source_text = payload.get("source_text", "")
+                parameters = payload.get("parameters", [])
+                output_path = payload.get("output_path", "")
+                result = self.state.save_document_text(display_name, source_text, parameters, output_path)
+                self._send_json(result)
+                return
             if parsed.path == "/api/compare":
                 current_path = payload.get("current_path", "")
                 parameters = payload.get("parameters", [])
                 compare_path = payload.get("compare_path", "")
                 result = self.state.compare_document(current_path, parameters, compare_path)
+                self._send_json(result)
+                return
+            if parsed.path == "/api/compare-text":
+                source_text = payload.get("source_text", "")
+                display_name = payload.get("display_name", "<uploaded>")
+                parameters = payload.get("parameters", [])
+                compare_path = payload.get("compare_path", "")
+                result = self.state.compare_document_text(source_text, parameters, compare_path, display_name)
                 self._send_json(result)
                 return
         except FileNotFoundError as error:

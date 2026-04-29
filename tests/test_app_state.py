@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from app import AppState
-from dcm_parser import DcmDocument
+from dcm_parser import DcmDocument, ValidationError
 
 
 SAMPLE_TEXT = """KONSERVIERUNG_FORMAT 2.0
@@ -16,6 +16,18 @@ END
 
 
 class AppStateTests(unittest.TestCase):
+    def test_load_document_text_marks_upload_mode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            state = AppState(root_dir=root, static_dir=static)
+
+            payload = state.load_document_text("picked.dcm", SAMPLE_TEXT)
+
+            self.assertEqual(payload["source_mode"], "upload")
+            self.assertEqual(payload["path"], "picked.dcm")
+
     def test_save_as_writes_new_target_without_changing_source(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -69,6 +81,34 @@ class AppStateTests(unittest.TestCase):
             self.assertTrue(backup_path.exists())
             self.assertEqual(backup_path.read_text(encoding="utf-8"), "old target")
             self.assertIn("WERT 810", output_path.read_text(encoding="utf-8"))
+
+    def test_save_document_text_requires_output_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            state = AppState(root_dir=root, static_dir=static)
+            document = DcmDocument.from_text(SAMPLE_TEXT, "picked.dcm")
+            payloads = [parameter.to_payload() for parameter in document.parameters]
+
+            with self.assertRaises(ValidationError):
+                state.save_document_text("picked.dcm", SAMPLE_TEXT, payloads, "")
+
+    def test_save_document_text_writes_selected_upload_to_target(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            output_path = root / "saved" / "picked.dcm"
+            state = AppState(root_dir=root, static_dir=static)
+            document = DcmDocument.from_text(SAMPLE_TEXT, "picked.dcm")
+            payloads = [parameter.to_payload() for parameter in document.parameters]
+            payloads[0]["value"] = "820"
+
+            result = state.save_document_text("picked.dcm", SAMPLE_TEXT, payloads, str(output_path))
+
+            self.assertEqual(result["path"], str(output_path))
+            self.assertIn("WERT 820", output_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

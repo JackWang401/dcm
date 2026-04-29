@@ -2,6 +2,8 @@ const MAX_HISTORY = 100;
 
 const state = {
   filePath: "",
+  sourceMode: "filesystem",
+  sourceText: "",
   sourceHash: "",
   files: [],
   original: new Map(),
@@ -17,6 +19,8 @@ const state = {
 
 const els = {
   filePath: document.querySelector("#file-path"),
+  dcmFileInput: document.querySelector("#dcm-file-input"),
+  pickDcmFile: document.querySelector("#pick-dcm-file"),
   comparePath: document.querySelector("#compare-path"),
   fileList: document.querySelector("#file-list"),
   parameterList: document.querySelector("#parameter-list"),
@@ -150,6 +154,13 @@ function applyHistorySnapshot(snapshot, origin) {
 
 function baselineLabel() {
   return state.comparePath || "Loaded snapshot";
+}
+
+function displayFileLabel() {
+  if (!state.filePath) {
+    return "None";
+  }
+  return state.sourceMode === "upload" ? `${state.filePath} (chosen in browser)` : state.filePath;
 }
 
 function isDirty() {
@@ -407,6 +418,7 @@ function activeCompareBaseline(name) {
 
 function setDocument(payload) {
   state.filePath = payload.path;
+  state.sourceMode = payload.source_mode || "filesystem";
   state.sourceHash = payload.source_hash;
   state.original = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
   state.current = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
@@ -417,6 +429,11 @@ function setDocument(payload) {
   clearCompare();
   els.filePath.value = payload.path;
   renderAll();
+}
+
+function setDocumentFromUpload(payload, sourceText) {
+  state.sourceText = sourceText;
+  setDocument(payload);
 }
 
 function clearCompare(render = false) {
@@ -487,7 +504,7 @@ function renderParameterList() {
 }
 
 function renderSummary() {
-  els.summaryFile.textContent = state.filePath || "None";
+  els.summaryFile.textContent = displayFileLabel();
   els.summaryTotal.textContent = String(parameterNames().length);
   els.summaryChanged.textContent = String(changedParameterCount());
   els.summarySelection.textContent = state.selectedName || "None";
@@ -554,6 +571,7 @@ function renderButtons() {
   els.saveAsFile.disabled = !state.filePath || !parameterNames().length || issues.length > 0;
   els.compareFile.disabled = !state.filePath || !parameterNames().length || !els.comparePath.value.trim();
   els.clearCompare.disabled = !state.comparePath;
+  els.pickDcmFile.disabled = false;
   els.importCsv.disabled = !hasDocument;
   els.exportCsv.disabled = !hasDocument;
   els.exportChangedCsv.disabled = !hasDocument || changedParameterCount() === 0;
@@ -1557,10 +1575,38 @@ async function loadDocument(path) {
       method: "POST",
       body: JSON.stringify({ path: targetPath }),
     });
+    state.sourceText = "";
     setDocument(payload);
     showStatus(`Loaded ${payload.parameters.length} parameters from ${payload.path}`, "success");
   } catch (error) {
     showStatus(error.message, "error");
+  }
+}
+
+async function loadDocumentFromText(file) {
+  if (!file) {
+    return;
+  }
+  if (isDirty() && !window.confirm("Load a new DCM file and discard unsaved changes?")) {
+    return;
+  }
+
+  try {
+    clearStatus();
+    const text = await file.text();
+    const payload = await api("/api/load-text", {
+      method: "POST",
+      body: JSON.stringify({
+        display_name: file.name,
+        text,
+      }),
+    });
+    setDocumentFromUpload(payload, text);
+    showStatus(`Loaded ${payload.parameters.length} parameters from ${file.name}`, "success");
+  } catch (error) {
+    showStatus(error.message, "error");
+  } finally {
+    els.dcmFileInput.value = "";
   }
 }
 
@@ -1572,14 +1618,24 @@ async function runCompare() {
   }
 
   try {
-    const payload = await api("/api/compare", {
-      method: "POST",
-      body: JSON.stringify({
-        current_path: state.filePath,
-        compare_path: comparePath,
-        parameters: collectParameters(),
-      }),
-    });
+    const payload = state.sourceMode === "upload"
+      ? await api("/api/compare-text", {
+          method: "POST",
+          body: JSON.stringify({
+            display_name: state.filePath,
+            source_text: state.sourceText,
+            compare_path: comparePath,
+            parameters: collectParameters(),
+          }),
+        })
+      : await api("/api/compare", {
+          method: "POST",
+          body: JSON.stringify({
+            current_path: state.filePath,
+            compare_path: comparePath,
+            parameters: collectParameters(),
+          }),
+        });
     state.comparePath = payload.compare_path;
     state.compareBaseline = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
     state.compareIssues = payload.validation_issues || [];
@@ -1592,6 +1648,9 @@ async function runCompare() {
 }
 
 async function saveDocument() {
+  if (state.sourceMode === "upload") {
+    return saveAsDocument();
+  }
   return saveDocumentToPath(null);
 }
 
@@ -1609,17 +1668,29 @@ async function saveDocumentToPath(outputPath = null) {
   }
 
   try {
-    const payload = await api("/api/save", {
-      method: "POST",
-      body: JSON.stringify({
-        path: state.filePath,
-        output_path: outputPath,
-        source_hash: state.sourceHash,
-        parameters: collectParameters(),
-      }),
-    });
+    const payload = state.sourceMode === "upload"
+      ? await api("/api/save-text", {
+          method: "POST",
+          body: JSON.stringify({
+            display_name: state.filePath,
+            source_text: state.sourceText,
+            output_path: outputPath,
+            parameters: collectParameters(),
+          }),
+        })
+      : await api("/api/save", {
+          method: "POST",
+          body: JSON.stringify({
+            path: state.filePath,
+            output_path: outputPath,
+            source_hash: state.sourceHash,
+            parameters: collectParameters(),
+          }),
+        });
     state.filePath = payload.path;
     els.filePath.value = payload.path;
+    state.sourceMode = payload.source_mode || "filesystem";
+    state.sourceText = "";
     state.sourceHash = payload.source_hash;
     state.original = new Map(parameterNames().map((name) => [name, deepClone(state.current.get(name))]));
     state.documentIssues = payload.validation_issues || [];
@@ -1690,7 +1761,13 @@ async function handleCsvFileSelection(event) {
   }
 }
 
+async function handleDcmFileSelection(event) {
+  const file = event.target.files?.[0];
+  await loadDocumentFromText(file);
+}
+
 els.refreshFiles.addEventListener("click", loadFiles);
+els.pickDcmFile.addEventListener("click", () => els.dcmFileInput.click());
 els.sampleFile.addEventListener("click", loadSamplePath);
 els.loadFile.addEventListener("click", () => loadDocument());
 els.saveAsFile.addEventListener("click", saveAsDocument);
@@ -1707,6 +1784,7 @@ els.exportCsv.addEventListener("click", () => triggerCsvDownload("all"));
 els.exportChangedCsv.addEventListener("click", () => triggerCsvDownload("changed"));
 els.exportDiffReport.addEventListener("click", exportDiffReport);
 els.csvFileInput.addEventListener("change", handleCsvFileSelection);
+els.dcmFileInput.addEventListener("change", handleDcmFileSelection);
 els.resetParameter.addEventListener("click", resetSelectedParameter);
 els.parameterSearch.addEventListener("input", renderParameterList);
 els.comparePath.addEventListener("input", renderButtons);

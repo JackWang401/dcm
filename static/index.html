@@ -12,10 +12,25 @@
         <div class="brand">
           <p class="eyebrow">Calibration Workspace</p>
           <h1>DCM Editor</h1>
-          <p class="brand-copy">Edit values, inspect maps, and compare changes before you save.</p>
+          <p class="brand-copy">Pick a DCM, scan the parameter list, click one item, and edit its details on the right.</p>
         </div>
 
-        <section class="panel">
+        <section class="panel compact-panel">
+          <div class="panel-header">
+            <h2>Open DCM</h2>
+          </div>
+          <div class="compact-actions">
+            <input id="dcm-file-input" type="file" accept=".dcm,text/plain" class="hidden-file-input" />
+            <button id="pick-dcm-file" type="button">Choose File</button>
+            <button id="sample-file" class="ghost-button" type="button">Use Sample</button>
+          </div>
+          <div class="inline-path">
+            <input id="file-path" type="text" spellcheck="false" placeholder="Or paste a local path" />
+            <button id="load-file" class="ghost-button" type="button">Load</button>
+          </div>
+        </section>
+
+        <section class="panel compact-panel">
           <div class="panel-header">
             <h2>Files</h2>
             <button id="refresh-files" class="ghost-button" type="button">Refresh</button>
@@ -34,71 +49,46 @@
       </aside>
 
       <main class="main">
-        <header class="toolbar">
-          <div class="path-group">
-            <label for="file-path">DCM path</label>
-            <input id="file-path" type="text" spellcheck="false" />
+        <header class="workspace-header panel">
+          <div class="workspace-title">
+            <div class="workspace-mainline">
+              <strong id="summary-file">None</strong>
+              <span id="summary-dirty" class="workspace-badge">Clean</span>
+            </div>
+            <div class="workspace-metrics">
+              <span><strong id="summary-total">0</strong> params</span>
+              <span><strong id="summary-changed">0</strong> changed</span>
+              <span>selected: <strong id="summary-selection">None</strong></span>
+              <span>baseline: <strong id="summary-compare">Loaded snapshot</strong></span>
+            </div>
           </div>
-          <div class="toolbar-actions">
-            <button id="sample-file" class="ghost-button" type="button">Use Sample</button>
-            <button id="load-file" type="button">Load</button>
+          <div class="toolbar-actions wrap-actions">
+            <button id="undo-change" class="ghost-button" type="button">Undo</button>
+            <button id="redo-change" class="ghost-button" type="button">Redo</button>
             <button id="save-as-file" class="ghost-button" type="button">Save As</button>
             <button id="save-file" type="button">Save</button>
           </div>
         </header>
 
-        <section class="toolbar subtoolbar">
-          <div class="path-group">
-            <label for="compare-path">Compare against DCM</label>
-            <input id="compare-path" type="text" spellcheck="false" placeholder="Optional comparison file" />
+        <section class="control-strip panel">
+          <div class="control-group">
+            <label for="compare-path">Compare file</label>
+            <div class="inline-path">
+              <input id="compare-path" type="text" spellcheck="false" placeholder="Optional compare path" />
+              <button id="compare-file" class="ghost-button" type="button">Compare</button>
+              <button id="clear-compare" class="ghost-button" type="button">Clear</button>
+            </div>
           </div>
-          <div class="toolbar-actions">
-            <button id="compare-file" class="ghost-button" type="button">Compare</button>
-            <button id="clear-compare" class="ghost-button" type="button">Clear Compare</button>
-            <button id="undo-change" class="ghost-button" type="button">Undo</button>
-            <button id="redo-change" class="ghost-button" type="button">Redo</button>
+          <div class="control-group">
+            <label for="csv-file-input">Bulk tools</label>
+            <div class="compact-actions">
+              <input id="csv-file-input" type="file" accept=".csv,text/csv" class="hidden-file-input" />
+              <button id="import-csv" class="ghost-button" type="button">Import CSV</button>
+              <button id="export-csv" class="ghost-button" type="button">Export All</button>
+              <button id="export-changed-csv" class="ghost-button" type="button">Export Changed</button>
+              <button id="export-diff-report" class="ghost-button" type="button">Diff Report</button>
+            </div>
           </div>
-        </section>
-
-        <section class="toolbar subtoolbar">
-          <div class="path-group">
-            <label for="csv-file-input">Bulk CSV Workflow</label>
-            <p class="muted compact-copy">Export editor values to CSV, edit externally, then import the file back as one undoable change.</p>
-          </div>
-          <div class="toolbar-actions">
-            <input id="csv-file-input" type="file" accept=".csv,text/csv" class="hidden-file-input" />
-            <button id="import-csv" class="ghost-button" type="button">Import CSV</button>
-            <button id="export-csv" class="ghost-button" type="button">Export All CSV</button>
-            <button id="export-changed-csv" class="ghost-button" type="button">Export Changed CSV</button>
-            <button id="export-diff-report" class="ghost-button" type="button">Export Diff Report</button>
-          </div>
-        </section>
-
-        <section class="summary-grid">
-          <article class="summary-card">
-            <span class="summary-label">Loaded file</span>
-            <strong id="summary-file">None</strong>
-          </article>
-          <article class="summary-card">
-            <span class="summary-label">Parameters</span>
-            <strong id="summary-total">0</strong>
-          </article>
-          <article class="summary-card">
-            <span class="summary-label">Changed</span>
-            <strong id="summary-changed">0</strong>
-          </article>
-          <article class="summary-card">
-            <span class="summary-label">Selection</span>
-            <strong id="summary-selection">None</strong>
-          </article>
-          <article class="summary-card">
-            <span class="summary-label">Compare baseline</span>
-            <strong id="summary-compare">Loaded snapshot</strong>
-          </article>
-          <article class="summary-card">
-            <span class="summary-label">Save state</span>
-            <strong id="summary-dirty">Clean</strong>
-          </article>
         </section>
 
         <section id="status" class="status"></section>
