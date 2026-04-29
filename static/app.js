@@ -75,6 +75,8 @@ const els = {
   saveAsFile: document.querySelector("#save-as-file"),
   saveFile: document.querySelector("#save-file"),
   sampleFile: document.querySelector("#sample-file"),
+  addParameter: document.querySelector("#add-parameter"),
+  deleteParameter: document.querySelector("#delete-parameter"),
   compareFile: document.querySelector("#compare-file"),
   clearCompare: document.querySelector("#clear-compare"),
   csvFileInput: document.querySelector("#csv-file-input"),
@@ -472,6 +474,12 @@ function countMetadataChanges(current, baseline) {
 
 function diffParameter(current, original) {
   const result = { changed: false, changedCells: 0, notes: [] };
+  if (!current && original) {
+    return { changed: true, changedCells: 1, notes: ["Parameter deleted"] };
+  }
+  if (current && !original) {
+    return { changed: true, changedCells: 1, notes: ["Parameter added"] };
+  }
   if (!current || !original) {
     return result;
   }
@@ -563,7 +571,8 @@ function diffParameter(current, original) {
 }
 
 function changedParameterCount() {
-  return parameterNames().filter((name) => diffParameter(state.current.get(name), state.original.get(name)).changed).length;
+  const names = new Set([...parameterNames(state.current), ...parameterNames(state.original)]);
+  return [...names].filter((name) => diffParameter(state.current.get(name), state.original.get(name)).changed).length;
 }
 
 function collectValidationIssues() {
@@ -869,7 +878,7 @@ function renderCompareOverview() {
 }
 
 function renderButtons() {
-  const hasDocument = Boolean(state.filePath && parameterNames().length);
+  const hasDocument = Boolean(state.filePath && (parameterNames().length || state.original.size));
   els.saveFile.disabled = !hasDocument;
   els.saveAsFile.disabled = !hasDocument;
   els.compareFile.disabled = !state.filePath || !parameterNames().length || !els.comparePath.value.trim();
@@ -881,12 +890,15 @@ function renderButtons() {
   els.exportDiffReport.disabled = !hasDocument;
   els.undoChange.disabled = state.undoStack.length === 0;
   els.redoChange.disabled = state.redoStack.length === 0;
+  els.addParameter.disabled = !state.filePath;
+  els.deleteParameter.disabled = !state.selectedName || !state.current.has(state.selectedName);
 }
 
 function renderDetail() {
   const parameter = state.current.get(state.selectedName);
-  const original = state.original.get(state.selectedName);
-  if (!parameter || !original) {
+  const storedOriginal = state.original.get(state.selectedName);
+  const original = storedOriginal || createEmptyBaseline(parameter);
+  if (!parameter) {
     els.emptyState.classList.remove("hidden");
     els.detailView.classList.add("hidden");
     return;
@@ -900,8 +912,35 @@ function renderDetail() {
     ? `Lines ${parameter.line_range.start}-${parameter.line_range.end} · ${parameter.header_suffix}`
     : `Lines ${parameter.line_range.start}-${parameter.line_range.end}`;
   renderEditor(parameter, original);
-  renderVisualization(parameter, original);
+  renderVisualization(parameter, storedOriginal || parameter);
   renderComparison(parameter);
+}
+
+function createEmptyBaseline(parameter) {
+  if (!parameter) {
+    return null;
+  }
+  const baseline = deepClone(parameter);
+  baseline.metadata = (parameter.metadata || []).map((item) => ({ ...item, value: "" }));
+  if (parameter.kind === "scalar") {
+    baseline.value = "";
+  }
+  if (parameter.kind === "list") {
+    baseline.values = parameter.values.map(() => "");
+  }
+  if (parameter.kind === "axis") {
+    baseline.x_axis = parameter.x_axis.map(() => "");
+  }
+  if (parameter.kind === "curve") {
+    baseline.x_axis = parameter.x_axis.map(() => "");
+    baseline.values = parameter.values.map(() => "");
+  }
+  if (parameter.kind === "map") {
+    baseline.x_axis = parameter.x_axis.map(() => "");
+    baseline.y_axis = parameter.y_axis.map(() => "");
+    baseline.map_values = parameter.map_values.map((row) => row.map(() => ""));
+  }
+  return baseline;
 }
 
 function renderEditor(parameter, original) {
@@ -2346,7 +2385,7 @@ async function saveDocument() {
 async function saveDocumentToPath(outputPath = null) {
   syncSelectedEditorInputs();
 
-  if (!state.filePath || !parameterNames().length) {
+  if (!state.filePath || (!parameterNames().length && !state.original.size)) {
     showStatus("Load a DCM file before saving.", "error");
     return;
   }
@@ -2415,6 +2454,97 @@ function resetSelectedParameter() {
   }, `Reset ${state.selectedName} to the loaded snapshot`);
 }
 
+function normalizeParameterName(name) {
+  return name.trim().replaceAll(/\s+/g, "_").replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function createNewParameterPayload(name, kind) {
+  const keywordByKind = {
+    scalar: "FESTWERT",
+    list: "FESTWERTEBLOCK",
+    axis: "STUETZSTELLENVERTEILUNG",
+    curve: "KENNLINIE",
+    map: "KENNFELD",
+  };
+  const payload = {
+    name,
+    keyword: keywordByKind[kind],
+    kind,
+    header_suffix: "",
+    metadata: [{ key: "LANGNAME", value: `"${name}"` }],
+    raw_lines: [],
+    line_range: { start: 0, end: 0 },
+  };
+  if (kind === "scalar") {
+    payload.value = "0";
+  } else if (kind === "list") {
+    payload.values = ["0", "0", "0"];
+  } else if (kind === "axis") {
+    payload.x_axis = ["0", "1", "2"];
+  } else if (kind === "curve") {
+    payload.x_axis = ["0", "1", "2"];
+    payload.values = ["0", "0", "0"];
+  } else if (kind === "map") {
+    payload.x_axis = ["0", "1"];
+    payload.y_axis = ["0", "1"];
+    payload.map_values = [["0", "0"], ["0", "0"]];
+  }
+  return payload;
+}
+
+function addParameter() {
+  if (!state.filePath) {
+    showStatus("Load a DCM file before adding a parameter.", "error");
+    return;
+  }
+  const rawName = window.prompt("New parameter name:");
+  if (!rawName) {
+    return;
+  }
+  const name = normalizeParameterName(rawName);
+  if (!name) {
+    showStatus("Parameter name cannot be empty.", "error");
+    return;
+  }
+  if (state.current.has(name) || state.original.has(name)) {
+    showStatus(`Parameter ${name} already exists.`, "error");
+    return;
+  }
+  const rawKind = window.prompt("Parameter kind: scalar, list, axis, curve, or map", "scalar");
+  if (!rawKind) {
+    return;
+  }
+  const kind = rawKind.trim().toLowerCase();
+  if (!["scalar", "list", "axis", "curve", "map"].includes(kind)) {
+    showStatus("Parameter kind must be scalar, list, axis, curve, or map.", "error");
+    return;
+  }
+
+  commitChange(() => {
+    state.current.set(name, createNewParameterPayload(name, kind));
+    state.selectedName = name;
+  }, `Added ${name}`);
+}
+
+function deleteSelectedParameter() {
+  const name = state.selectedName;
+  if (!name || !state.current.has(name)) {
+    showStatus("Select a parameter before deleting.", "error");
+    return;
+  }
+  if (!window.confirm(`Delete ${name} from the current DCM? This will remove it when you save.`)) {
+    return;
+  }
+
+  const names = parameterNames();
+  const index = names.indexOf(name);
+  const nextName = names[index + 1] || names[index - 1] || null;
+  commitChange(() => {
+    state.current.delete(name);
+    state.selectedName = nextName;
+  }, `Deleted ${name}`);
+}
+
 function undoChange() {
   const snapshot = state.undoStack.pop();
   if (!snapshot) {
@@ -2459,6 +2589,8 @@ els.sampleFile.addEventListener("click", loadSamplePath);
 els.loadFile.addEventListener("click", () => loadDocument());
 els.saveAsFile.addEventListener("click", saveAsDocument);
 els.saveFile.addEventListener("click", saveDocument);
+els.addParameter.addEventListener("click", addParameter);
+els.deleteParameter.addEventListener("click", deleteSelectedParameter);
 els.compareFile.addEventListener("click", runCompare);
 els.clearCompare.addEventListener("click", () => {
   clearCompare(true);

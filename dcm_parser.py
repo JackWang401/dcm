@@ -20,6 +20,14 @@ SUPPORTED_KEYWORDS = {
     "GRUPPENKENNFELD": "map",
 }
 
+DEFAULT_KEYWORD_BY_KIND = {
+    "scalar": "FESTWERT",
+    "list": "FESTWERTEBLOCK",
+    "axis": "STUETZSTELLENVERTEILUNG",
+    "curve": "KENNLINIE",
+    "map": "KENNFELD",
+}
+
 
 @dataclass
 class BodyItem:
@@ -332,6 +340,59 @@ def _is_structured_metadata_prefix(prefix: str) -> bool:
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_/-]*", prefix))
 
 
+def _parameter_lines_from_payload(payload: dict[str, Any]) -> list[str]:
+    name = str(payload.get("name", "")).strip()
+    kind = str(payload.get("kind", "")).strip()
+    keyword = str(payload.get("keyword") or DEFAULT_KEYWORD_BY_KIND.get(kind, "")).strip()
+    if not name:
+        raise ValidationError("New parameter name is required")
+    if SUPPORTED_KEYWORDS.get(keyword) != kind:
+        raise ValidationError(f"Unsupported parameter keyword/kind combination: {keyword}/{kind}")
+
+    header_suffix = str(payload.get("header_suffix", "")).strip()
+    header = f"{keyword} {name}{f' {header_suffix}' if header_suffix else ''}"
+    lines = [header]
+
+    for item in payload.get("metadata") or []:
+        if not isinstance(item, dict):
+            raise ValidationError(f"{name}.metadata item must be an object")
+        key = str(item.get("key", "")).strip()
+        value = str(item.get("value", "")).strip()
+        if key:
+            lines.append(_format_metadata_line("  ", key, value))
+
+    if kind == "scalar":
+        lines.append(_format_line("  ", "WERT", [str(payload.get("value", "0"))]))
+    elif kind == "list":
+        lines.append(_format_line("  ", "WERT", [str(item) for item in payload.get("values") or ["0"]]))
+    elif kind == "axis":
+        lines.append(_format_line("  ", "ST/X", [str(item) for item in payload.get("x_axis") or ["0", "1"]]))
+    elif kind == "curve":
+        x_axis = [str(item) for item in payload.get("x_axis") or ["0", "1"]]
+        values = [str(item) for item in payload.get("values") or ["0", "0"]]
+        if len(x_axis) != len(values):
+            raise ValidationError(f"Curve {name} must keep x-axis and values aligned")
+        lines.append(_format_line("  ", "ST/X", x_axis))
+        lines.append(_format_line("  ", "WERT", values))
+    elif kind == "map":
+        x_axis = [str(item) for item in payload.get("x_axis") or ["0", "1"]]
+        y_axis = [str(item) for item in payload.get("y_axis") or ["0", "1"]]
+        map_values = [[str(item) for item in row] for row in payload.get("map_values") or [["0", "0"], ["0", "0"]]]
+        if len(map_values) != len(y_axis):
+            raise ValidationError(f"Map {name} row count must match y-axis size")
+        if any(len(row) != len(x_axis) for row in map_values):
+            raise ValidationError(f"Map {name} column count must match x-axis size")
+        lines.append(_format_line("  ", "ST/X", x_axis))
+        lines.append(_format_line("  ", "ST/Y", y_axis))
+        for row in map_values:
+            lines.append(_format_line("  ", "WERT", row))
+    else:
+        raise ValidationError(f"Unsupported parameter kind: {kind}")
+
+    lines.append("END")
+    return lines
+
+
 @dataclass
 class DcmDocument:
     path: Path
@@ -382,11 +443,40 @@ class DcmDocument:
         }
 
     def apply_payloads(self, payloads: list[dict[str, Any]]) -> None:
-        payload_by_name = {payload.get("name"): payload for payload in payloads}
-        for parameter in self.parameters:
-            payload = payload_by_name.get(parameter.name)
-            if payload is not None:
-                parameter.apply_payload(payload)
+        trailing_newline = self.trailing_newline
+        original_by_name = {parameter.name: parameter for parameter in self.parameters}
+        payload_by_name = {str(payload.get("name", "")).strip(): payload for payload in payloads}
+        rendered_lines: list[str] = []
+        cursor = 0
+
+        if "" in payload_by_name:
+            raise ValidationError("Parameter name is required")
+
+        for original in self.parameters:
+            rendered_lines.extend(self.lines[cursor : original.start_line])
+            payload = payload_by_name.get(original.name)
+            if payload is None:
+                cursor = original.end_line + 1
+                continue
+
+            original.apply_payload(payload)
+            rendered_lines.extend(original.render_lines())
+            cursor = original.end_line + 1
+
+        rendered_lines.extend(self.lines[cursor:])
+
+        for payload in payloads:
+            name = str(payload.get("name", "")).strip()
+            if name in original_by_name:
+                continue
+            if rendered_lines and rendered_lines[-1].strip():
+                rendered_lines.append("")
+            rendered_lines.extend(_parameter_lines_from_payload(payload))
+
+        rebuilt = DcmDocument.from_text("\n".join(rendered_lines), self.path)
+        self.lines = rebuilt.lines
+        self.trailing_newline = trailing_newline
+        self.parameters = rebuilt.parameters
 
     def render_text(self) -> str:
         rendered_lines: list[str] = []

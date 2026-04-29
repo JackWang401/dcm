@@ -104,6 +104,58 @@ class AppStateTests(unittest.TestCase):
             self.assertEqual(result["path"], str(source_path))
             self.assertIn("WERT fast", source_path.read_text(encoding="utf-8"))
 
+    def test_save_document_deletes_missing_parameter_payload(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            source_path = root / "source.dcm"
+            source_path.write_text(SAMPLE_TEXT, encoding="utf-8")
+
+            state = AppState(root_dir=root, static_dir=static)
+            document = DcmDocument.from_file(source_path)
+
+            state.save_document(
+                requested_path=str(source_path),
+                source_hash=document.to_payload()["source_hash"],
+                parameters=[],
+            )
+
+            saved = source_path.read_text(encoding="utf-8")
+            self.assertIn("KONSERVIERUNG_FORMAT 2.0", saved)
+            self.assertNotIn("FESTWERT IDLE_SPEED_LIMIT", saved)
+
+    def test_save_document_appends_new_parameter_payload(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            source_path = root / "source.dcm"
+            source_path.write_text(SAMPLE_TEXT, encoding="utf-8")
+
+            state = AppState(root_dir=root, static_dir=static)
+            document = DcmDocument.from_file(source_path)
+            payloads = [parameter.to_payload() for parameter in document.parameters]
+            payloads.append(
+                {
+                    "name": "ADDED_LIMIT",
+                    "keyword": "FESTWERT",
+                    "kind": "scalar",
+                    "metadata": [{"key": "LANGNAME", "value": '"Added limit"'}],
+                    "value": "12",
+                }
+            )
+
+            state.save_document(
+                requested_path=str(source_path),
+                source_hash=document.to_payload()["source_hash"],
+                parameters=payloads,
+            )
+
+            saved = source_path.read_text(encoding="utf-8")
+            self.assertIn("FESTWERT ADDED_LIMIT", saved)
+            self.assertIn("WERT 12", saved)
+
     def test_save_document_text_requires_output_path(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

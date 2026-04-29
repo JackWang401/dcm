@@ -71,6 +71,38 @@ class DcmParserTests(unittest.TestCase):
         self.assertIn("WERT 0 150 320", rendered)
         self.assertIn("WERT 1285 1350", rendered)
 
+    def test_apply_payloads_deletes_missing_parameter(self) -> None:
+        document = DcmDocument.from_text(SAMPLE_TEXT)
+        payloads = [parameter.to_payload() for parameter in document.parameters if parameter.name != "TORQUE_REQUEST_CURVE"]
+
+        document.apply_payloads(payloads)
+        rendered = document.render_text()
+
+        self.assertIn("KONSERVIERUNG_FORMAT 2.0", rendered)
+        self.assertNotIn("KENNLINIE TORQUE_REQUEST_CURVE", rendered)
+        self.assertIn("FESTWERT IDLE_SPEED_LIMIT", rendered)
+        self.assertIn("KENNFELD BOOST_TARGET_MAP", rendered)
+
+    def test_apply_payloads_appends_new_parameter(self) -> None:
+        document = DcmDocument.from_text(SAMPLE_TEXT)
+        payloads = [parameter.to_payload() for parameter in document.parameters]
+        payloads.append(
+            {
+                "name": "NEW_SCALAR",
+                "keyword": "FESTWERT",
+                "kind": "scalar",
+                "metadata": [{"key": "LANGNAME", "value": '"New scalar"'}],
+                "value": "42",
+            }
+        )
+
+        document.apply_payloads(payloads)
+        rendered = document.render_text()
+
+        self.assertIn("FESTWERT NEW_SCALAR", rendered)
+        self.assertIn('LANGNAME "New scalar"', rendered)
+        self.assertIn("WERT 42", rendered)
+
     def test_round_trip_file_io(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "sample.dcm"
