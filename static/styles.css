@@ -455,6 +455,43 @@ button:disabled {
   transform: none;
 }
 
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(46, 35, 25, 0.28);
+}
+
+.confirm-dialog {
+  width: min(420px, 100%);
+  padding: 18px;
+  border: 1px solid rgba(110, 76, 45, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 252, 247, 0.98);
+  box-shadow: 0 28px 70px rgba(46, 35, 25, 0.24);
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.confirm-dialog p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 .empty-state {
   padding: 22px 18px;
   text-align: center;

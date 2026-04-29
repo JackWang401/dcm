@@ -14,6 +14,7 @@ const MAX_DETAIL_PANE_HEIGHT = 1100;
 
 const state = {
   filePath: "",
+  outputFolderPath: "",
   sourceMode: "filesystem",
   sourceText: "",
   sourceHash: "",
@@ -80,6 +81,11 @@ const els = {
   parameterContextMenu: document.querySelector("#parameter-context-menu"),
   contextAddParameter: document.querySelector("#context-add-parameter"),
   contextDeleteParameter: document.querySelector("#context-delete-parameter"),
+  confirmOverlay: document.querySelector("#confirm-overlay"),
+  confirmTitle: document.querySelector("#confirm-title"),
+  confirmMessage: document.querySelector("#confirm-message"),
+  confirmCancel: document.querySelector("#confirm-cancel"),
+  confirmOk: document.querySelector("#confirm-ok"),
   compareFile: document.querySelector("#compare-file"),
   clearCompare: document.querySelector("#clear-compare"),
   csvFileInput: document.querySelector("#csv-file-input"),
@@ -91,6 +97,8 @@ const els = {
   redoChange: document.querySelector("#redo-change"),
   resetParameter: document.querySelector("#reset-parameter"),
 };
+
+let pendingConfirmResolve = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -129,12 +137,35 @@ function splitPath(path) {
   };
 }
 
+function hasPathDirectory(path) {
+  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) !== -1;
+}
+
+function pathDirectory(path) {
+  return splitPath(path).directory.replace(/[\\/]$/, "");
+}
+
 function suggestSaveAsPath(inputPath) {
   const { directory, filename } = splitPath(inputPath.trim());
   const targetName = filename.endsWith(".dcm")
     ? filename.replace(/\.dcm$/i, "_copy.dcm")
     : `${filename}_copy.dcm`;
-  return `${directory}${targetName}`;
+  if (directory) {
+    return `${directory}${targetName}`;
+  }
+  if (state.outputFolderPath) {
+    const separator = state.outputFolderPath.includes("\\") ? "\\" : "/";
+    return `${state.outputFolderPath}${separator}${targetName}`;
+  }
+  return targetName;
+}
+
+function normalizeOutputPath(outputPath) {
+  if (!outputPath || hasPathDirectory(outputPath) || !state.outputFolderPath) {
+    return outputPath;
+  }
+  const separator = state.outputFolderPath.includes("\\") ? "\\" : "/";
+  return `${state.outputFolderPath}${separator}${outputPath}`;
 }
 
 function clampSidebarWidth(width) {
@@ -725,6 +756,7 @@ function activeCompareBaseline(name) {
 
 function setDocument(payload) {
   state.filePath = payload.path;
+  state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : state.outputFolderPath;
   state.sourceMode = payload.source_mode || "filesystem";
   state.sourceHash = payload.source_hash;
   state.original = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
@@ -840,6 +872,30 @@ function showParameterContextMenu(event, targetName = null) {
   const top = Math.min(event.clientY, window.innerHeight - menuRect.height - 8);
   els.parameterContextMenu.style.left = `${Math.max(8, left)}px`;
   els.parameterContextMenu.style.top = `${Math.max(8, top)}px`;
+}
+
+function closeConfirmDialog(result) {
+  if (!pendingConfirmResolve) {
+    return;
+  }
+  const resolve = pendingConfirmResolve;
+  pendingConfirmResolve = null;
+  els.confirmOverlay.classList.add("hidden");
+  resolve(result);
+}
+
+function confirmCentered({ title, message, confirmLabel = "OK" }) {
+  if (pendingConfirmResolve) {
+    closeConfirmDialog(false);
+  }
+  els.confirmTitle.textContent = title;
+  els.confirmMessage.textContent = message;
+  els.confirmOk.textContent = confirmLabel;
+  els.confirmOverlay.classList.remove("hidden");
+  els.confirmCancel.focus();
+  return new Promise((resolve) => {
+    pendingConfirmResolve = resolve;
+  });
 }
 
 function revealDetailInMainPane() {
@@ -2369,15 +2425,16 @@ async function loadDocumentFromText(file) {
   try {
     clearStatus();
     const text = await file.text();
+    const displayPath = file.path || file.webkitRelativePath || file.name;
     const payload = await api("/api/load-text", {
       method: "POST",
       body: JSON.stringify({
-        display_name: file.name,
+        display_name: displayPath,
         text,
       }),
     });
     setDocumentFromUpload(payload, text);
-    showStatus(`Loaded ${payload.parameters.length} parameters from ${file.name}`, "success");
+    showStatus(`Loaded ${payload.parameters.length} parameters from ${displayPath}`, "success");
   } catch (error) {
     showStatus(error.message, "error");
   } finally {
@@ -2438,6 +2495,7 @@ async function saveDocumentToPath(outputPath = null) {
   }
 
   const issues = collectValidationIssues();
+  const targetOutputPath = normalizeOutputPath(outputPath);
 
   try {
     const payload = state.sourceMode === "upload"
@@ -2446,7 +2504,7 @@ async function saveDocumentToPath(outputPath = null) {
           body: JSON.stringify({
             display_name: state.filePath,
             source_text: state.sourceText,
-            output_path: outputPath,
+            output_path: targetOutputPath,
             parameters: collectParameters(),
           }),
         })
@@ -2454,12 +2512,13 @@ async function saveDocumentToPath(outputPath = null) {
           method: "POST",
           body: JSON.stringify({
             path: state.filePath,
-            output_path: outputPath,
+            output_path: targetOutputPath,
             source_hash: state.sourceHash,
             parameters: collectParameters(),
           }),
         });
     state.filePath = payload.path;
+    state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : state.outputFolderPath;
     els.filePath.value = payload.path;
     state.sourceMode = payload.source_mode || "filesystem";
     state.sourceText = "";
@@ -2481,6 +2540,14 @@ async function saveAsDocument() {
   if (!state.filePath || !parameterNames().length) {
     showStatus("Load a DCM file before using Save As.", "error");
     return;
+  }
+  if (state.sourceMode === "upload" && !hasPathDirectory(state.filePath) && !state.outputFolderPath) {
+    const folderPath = window.prompt("Output folder path:");
+    if (!folderPath) {
+      showStatus("Provide an output folder path before saving a file opened from the file picker.", "error");
+      return;
+    }
+    state.outputFolderPath = folderPath.trim();
   }
   const suggestedPath = suggestSaveAsPath(state.filePath);
   const outputPath = window.prompt("Save DCM as:", suggestedPath);
@@ -2604,13 +2671,18 @@ function addParameter() {
   }, `Added ${name}`);
 }
 
-function deleteSelectedParameter() {
+async function deleteSelectedParameter() {
   const name = state.selectedName;
   if (!name || !state.current.has(name)) {
     showStatus("Select a parameter before deleting.", "error");
     return;
   }
-  if (!window.confirm(`Delete ${name} from the current DCM? This will remove it when you save.`)) {
+  const confirmed = await confirmCentered({
+    title: "Delete parameter",
+    message: `Delete ${name} from the current DCM? This will remove it when you save.`,
+    confirmLabel: "Delete",
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -2677,6 +2749,13 @@ els.contextDeleteParameter.addEventListener("click", () => {
   hideParameterContextMenu();
   deleteSelectedParameter();
 });
+els.confirmCancel.addEventListener("click", () => closeConfirmDialog(false));
+els.confirmOk.addEventListener("click", () => closeConfirmDialog(true));
+els.confirmOverlay.addEventListener("click", (event) => {
+  if (event.target === els.confirmOverlay) {
+    closeConfirmDialog(false);
+  }
+});
 els.compareFile.addEventListener("click", runCompare);
 els.clearCompare.addEventListener("click", () => {
   clearCompare(true);
@@ -2709,6 +2788,7 @@ window.addEventListener("resize", hideParameterContextMenu);
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
+    closeConfirmDialog(false);
     hideParameterContextMenu();
   }
 });
