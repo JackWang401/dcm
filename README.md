@@ -22,6 +22,13 @@ python3 app.py
 
 Then open `http://127.0.0.1:8765`.
 
+## One-Click Launch
+
+- macOS: double-click [launch_mac.command](/Users/wangjianhai/02_ADAS/01_repo/01_Tools/05_dcm/launch_mac.command)
+- Windows: double-click [launch_windows.bat](/Users/wangjianhai/02_ADAS/01_repo/01_Tools/05_dcm/launch_windows.bat)
+
+These launchers start the local server and open the editor in your default browser automatically.
+
 ## Notes
 
 - The tool creates a timestamped `.bak` file before each save.
