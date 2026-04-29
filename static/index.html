@@ -43,6 +43,10 @@
             <h2>Parameters</h2>
             <span id="parameter-count" class="muted">0</span>
           </div>
+          <div class="parameter-actions">
+            <button id="add-parameter" class="ghost-button" type="button">Add Parameter</button>
+            <button id="delete-parameter" class="ghost-button" type="button">Delete Parameter</button>
+          </div>
           <input id="parameter-search" class="search-input" type="search" placeholder="Search parameter" />
           <div id="parameter-list" class="parameter-list"></div>
         </section>
@@ -74,8 +78,6 @@
           <div class="toolbar-actions wrap-actions">
             <button id="undo-change" class="ghost-button" type="button">Undo</button>
             <button id="redo-change" class="ghost-button" type="button">Redo</button>
-            <button id="add-parameter" class="ghost-button" type="button">Add Parameter</button>
-            <button id="delete-parameter" class="ghost-button" type="button">Delete Parameter</button>
             <button id="save-as-file" class="ghost-button" type="button">Save As</button>
             <button id="save-file" type="button">Save</button>
           </div>
@@ -177,6 +179,11 @@
           </article>
         </section>
       </main>
+    </div>
+
+    <div id="parameter-context-menu" class="context-menu hidden" role="menu">
+      <button id="context-add-parameter" type="button" role="menuitem">Add Parameter</button>
+      <button id="context-delete-parameter" type="button" role="menuitem">Delete Parameter</button>
     </div>
 
     <script src="/app.js"></script>

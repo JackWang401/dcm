@@ -77,6 +77,9 @@ const els = {
   sampleFile: document.querySelector("#sample-file"),
   addParameter: document.querySelector("#add-parameter"),
   deleteParameter: document.querySelector("#delete-parameter"),
+  parameterContextMenu: document.querySelector("#parameter-context-menu"),
+  contextAddParameter: document.querySelector("#context-add-parameter"),
+  contextDeleteParameter: document.querySelector("#context-delete-parameter"),
   compareFile: document.querySelector("#compare-file"),
   clearCompare: document.querySelector("#clear-compare"),
   csvFileInput: document.querySelector("#csv-file-input"),
@@ -113,6 +116,25 @@ function clearStatus() {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function splitPath(path) {
+  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (separatorIndex === -1) {
+    return { directory: "", filename: path };
+  }
+  return {
+    directory: path.slice(0, separatorIndex + 1),
+    filename: path.slice(separatorIndex + 1),
+  };
+}
+
+function suggestSaveAsPath(inputPath) {
+  const { directory, filename } = splitPath(inputPath.trim());
+  const targetName = filename.endsWith(".dcm")
+    ? filename.replace(/\.dcm$/i, "_copy.dcm")
+    : `${filename}_copy.dcm`;
+  return `${directory}${targetName}`;
 }
 
 function clampSidebarWidth(width) {
@@ -782,17 +804,42 @@ function renderParameterList() {
       button.classList.add("changed");
     }
     button.innerHTML = `<strong>${name}</strong>`;
-    button.addEventListener("click", () => {
-      state.selectedName = name;
-      updateParameterSelection();
-      renderSummary();
-      renderDetail();
-      renderButtons();
-      revealDetailInMainPane();
-    });
+    button.addEventListener("click", () => selectParameter(name, { reveal: true }));
     els.parameterList.appendChild(button);
   });
   els.parameterList.scrollTop = previousScrollTop;
+}
+
+function selectParameter(name, options = {}) {
+  state.selectedName = name;
+  updateParameterSelection();
+  renderSummary();
+  renderDetail();
+  renderButtons();
+  if (options.reveal) {
+    revealDetailInMainPane();
+  }
+}
+
+function hideParameterContextMenu() {
+  els.parameterContextMenu.classList.add("hidden");
+}
+
+function showParameterContextMenu(event, targetName = null) {
+  event.preventDefault();
+  if (targetName && state.current.has(targetName)) {
+    selectParameter(targetName);
+  }
+
+  els.contextAddParameter.disabled = !state.filePath;
+  els.contextDeleteParameter.disabled = !state.selectedName || !state.current.has(state.selectedName);
+  els.parameterContextMenu.classList.remove("hidden");
+
+  const menuRect = els.parameterContextMenu.getBoundingClientRect();
+  const left = Math.min(event.clientX, window.innerWidth - menuRect.width - 8);
+  const top = Math.min(event.clientY, window.innerHeight - menuRect.height - 8);
+  els.parameterContextMenu.style.left = `${Math.max(8, left)}px`;
+  els.parameterContextMenu.style.top = `${Math.max(8, top)}px`;
 }
 
 function revealDetailInMainPane() {
@@ -2435,9 +2482,7 @@ async function saveAsDocument() {
     showStatus("Load a DCM file before using Save As.", "error");
     return;
   }
-  const suggestedPath = state.filePath.endsWith(".dcm")
-    ? state.filePath.replace(/\.dcm$/i, "_copy.dcm")
-    : `${state.filePath}_copy.dcm`;
+  const suggestedPath = suggestSaveAsPath(state.filePath);
   const outputPath = window.prompt("Save DCM as:", suggestedPath);
   if (!outputPath) {
     return;
@@ -2624,6 +2669,14 @@ els.saveAsFile.addEventListener("click", saveAsDocument);
 els.saveFile.addEventListener("click", saveDocument);
 els.addParameter.addEventListener("click", addParameter);
 els.deleteParameter.addEventListener("click", deleteSelectedParameter);
+els.contextAddParameter.addEventListener("click", () => {
+  hideParameterContextMenu();
+  addParameter();
+});
+els.contextDeleteParameter.addEventListener("click", () => {
+  hideParameterContextMenu();
+  deleteSelectedParameter();
+});
 els.compareFile.addEventListener("click", runCompare);
 els.clearCompare.addEventListener("click", () => {
   clearCompare(true);
@@ -2639,7 +2692,26 @@ els.csvFileInput.addEventListener("change", handleCsvFileSelection);
 els.dcmFileInput.addEventListener("change", handleDcmFileSelection);
 els.resetParameter.addEventListener("click", resetSelectedParameter);
 els.parameterSearch.addEventListener("input", renderParameterList);
+els.parameterList.addEventListener("contextmenu", (event) => {
+  const item = event.target.closest(".parameter-item");
+  showParameterContextMenu(event, item?.dataset.name || null);
+});
+els.parameterList.addEventListener("scroll", hideParameterContextMenu);
 els.comparePath.addEventListener("input", renderButtons);
+
+document.addEventListener("click", (event) => {
+  if (!els.parameterContextMenu.contains(event.target)) {
+    hideParameterContextMenu();
+  }
+});
+
+window.addEventListener("resize", hideParameterContextMenu);
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideParameterContextMenu();
+  }
+});
 
 window.addEventListener("beforeunload", (event) => {
   if (!isDirty()) {

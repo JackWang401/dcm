@@ -222,6 +222,13 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.parameter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .hidden-file-input {
   display: none;
 }
@@ -418,6 +425,34 @@ button:disabled {
 
 .search-input {
   margin-top: 8px;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid rgba(110, 76, 45, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 252, 247, 0.98);
+  box-shadow: 0 18px 38px rgba(63, 43, 30, 0.18);
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  text-align: left;
+}
+
+.context-menu button:hover {
+  background: rgba(255, 247, 238, 0.96);
+  box-shadow: none;
+  transform: none;
 }
 
 .empty-state {
