@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DCM Editor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Calibration Workspace</p>
+          <h1>DCM Editor</h1>
+          <p class="brand-copy">Edit values, inspect maps, and compare changes before you save.</p>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Files</h2>
+            <button id="refresh-files" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="file-list" class="file-list"></div>
+        </section>
+
+        <section class="panel grow">
+          <div class="panel-header">
+            <h2>Parameters</h2>
+            <span id="parameter-count" class="muted">0</span>
+          </div>
+          <input id="parameter-search" class="search-input" type="search" placeholder="Search parameter" />
+          <div id="parameter-list" class="parameter-list"></div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="toolbar">
+          <div class="path-group">
+            <label for="file-path">DCM path</label>
+            <input id="file-path" type="text" spellcheck="false" />
+          </div>
+          <div class="toolbar-actions">
+            <button id="sample-file" class="ghost-button" type="button">Use Sample</button>
+            <button id="load-file" type="button">Load</button>
+            <button id="save-file" type="button">Save</button>
+          </div>
+        </header>
+
+        <section class="summary-grid">
+          <article class="summary-card">
+            <span class="summary-label">Loaded file</span>
+            <strong id="summary-file">None</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Parameters</span>
+            <strong id="summary-total">0</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Changed</span>
+            <strong id="summary-changed">0</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Selection</span>
+            <strong id="summary-selection">None</strong>
+          </article>
+        </section>
+
+        <section id="status" class="status"></section>
+
+        <section id="empty-state" class="empty-state">
+          <h2>Load a DCM file</h2>
+          <p>The editor supports scalar values, tables, curves, and maps from common `FESTWERT`, `FESTWERTEBLOCK`, `KENNLINIE`, and `KENNFELD` blocks.</p>
+        </section>
+
+        <section id="detail-view" class="detail-view hidden">
+          <div class="detail-header">
+            <div>
+              <p id="detail-kind" class="eyebrow"></p>
+              <h2 id="detail-name"></h2>
+            </div>
+            <button id="reset-parameter" class="ghost-button" type="button">Reset Parameter</button>
+          </div>
+
+          <div class="detail-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <h3>Editor</h3>
+                <span id="line-range" class="muted"></span>
+              </div>
+              <div id="editor-slot"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <h3>Visualization</h3>
+                <span id="visual-hint" class="muted"></span>
+              </div>
+              <div id="visual-slot"></div>
+            </article>
+          </div>
+
+          <article class="panel compare-panel">
+            <div class="panel-header">
+              <h3>Previous vs Current</h3>
+              <span id="compare-summary" class="muted"></span>
+            </div>
+            <div id="compare-slot"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
