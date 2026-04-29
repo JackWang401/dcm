@@ -1564,11 +1564,11 @@ function renderLineChart(seriesList) {
     const points = item.pointsData.map(({ x, y }) => `${x},${y}`).join(" ");
     const dash = item.dash ? ` stroke-dasharray="${escapeHtml(item.dash)}"` : "";
     const dots = item.pointsData.map(({ x, y, value }) => `
-      <circle cx="${x}" cy="${y}" r="2.4" fill="${escapeHtml(item.color)}"></circle>
+      <circle cx="${x}" cy="${y}" r="1.4" fill="${escapeHtml(item.color)}"></circle>
       ${seriesIndex === seriesPoints.length - 1 ? `<text x="${x}" y="${y - 4.4}" text-anchor="middle" font-size="3" fill="#756251">${escapeHtml(formatTick(value))}</text>` : ""}
     `).join("");
     return `
-      <polyline fill="none" stroke="${escapeHtml(item.color)}" stroke-width="1.4"${dash} points="${points}"></polyline>
+      <polyline fill="none" stroke="${escapeHtml(item.color)}" stroke-width="0.47"${dash} points="${points}"></polyline>
       ${dots}
     `;
   }).join("");
