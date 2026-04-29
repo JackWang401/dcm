@@ -175,7 +175,8 @@ body.is-resizing .sidebar-resizer::before {
 
 input[type="text"],
 input[type="search"],
-input[type="number"] {
+input[type="number"],
+select {
   width: 100%;
   border: 1px solid rgba(110, 76, 45, 0.22);
   border-radius: 10px;
@@ -615,6 +616,13 @@ body.is-detail-height-resizing .detail-height-resizer::before {
 .compare-pill,
 .delta-cell {
   font-family: Menlo, Consolas, monospace;
+}
+
+.scalar-editor {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
 }
 
 .changed-cell {

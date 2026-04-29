@@ -75,6 +75,7 @@ const els = {
   loadFile: document.querySelector("#load-file"),
   saveAsFile: document.querySelector("#save-as-file"),
   saveFile: document.querySelector("#save-file"),
+  selectOutputFolder: document.querySelector("#select-output-folder"),
   sampleFile: document.querySelector("#sample-file"),
   addParameter: document.querySelector("#add-parameter"),
   deleteParameter: document.querySelector("#delete-parameter"),
@@ -544,8 +545,14 @@ function diffParameter(current, original) {
   const dataChangedCellsBeforeMetadata = () => result.changedCells - countMetadataChanges(current, original);
 
   if (current.kind === "scalar") {
-    result.changed = current.value !== original.value;
-    result.changedCells = result.changed ? 1 : 0;
+    if (current.value_prefix !== original.value_prefix) {
+      result.changed = true;
+      result.changedCells += 1;
+    }
+    if (current.value !== original.value) {
+      result.changed = true;
+      result.changedCells += 1;
+    }
   } else if (current.kind === "list") {
     current.values.forEach((value, index) => {
       if (value !== original.values[index]) {
@@ -605,7 +612,7 @@ function diffParameter(current, original) {
   if (result.changed) {
     const dataChangedCells = dataChangedCellsBeforeMetadata();
     if (current.kind === "scalar" && dataChangedCells > 0) {
-      result.notes.push("Value changed");
+      result.notes.push(dataChangedCells === 1 ? "Value field changed" : `${dataChangedCells} value field(s) changed`);
     } else if (current.kind === "list" && dataChangedCells > 0) {
       result.notes.push(`${dataChangedCells} value item(s) changed`);
     } else if (current.kind === "axis" && dataChangedCells > 0) {
@@ -756,7 +763,7 @@ function activeCompareBaseline(name) {
 
 function setDocument(payload) {
   state.filePath = payload.path;
-  state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : state.outputFolderPath;
+  state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : "";
   state.sourceMode = payload.source_mode || "filesystem";
   state.sourceHash = payload.source_hash;
   state.original = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
@@ -995,6 +1002,7 @@ function renderButtons() {
   els.redoChange.disabled = state.redoStack.length === 0;
   els.addParameter.disabled = !state.filePath;
   els.deleteParameter.disabled = !state.selectedName || !state.current.has(state.selectedName);
+  els.selectOutputFolder.disabled = !state.filePath;
 }
 
 function renderDetail() {
@@ -1026,6 +1034,7 @@ function createEmptyBaseline(parameter) {
   const baseline = deepClone(parameter);
   baseline.metadata = (parameter.metadata || []).map((item) => ({ ...item, value: "" }));
   if (parameter.kind === "scalar") {
+    baseline.value_prefix = "";
     baseline.value = "";
   }
   if (parameter.kind === "list") {
@@ -1050,11 +1059,26 @@ function renderEditor(parameter, original) {
   els.editorSlot.innerHTML = "";
   if (parameter.kind === "scalar") {
     const wrapper = document.createElement("div");
+    wrapper.className = "scalar-editor";
     wrapper.innerHTML = `
-      <label class="summary-label">Value</label>
-      <input id="scalar-input" type="text" value="${escapeHtml(parameter.value)}" />
+      <div>
+        <label class="summary-label" for="scalar-prefix">Value Field</label>
+        <select id="scalar-prefix">
+          <option value="WERT" ${parameter.value_prefix === "WERT" ? "selected" : ""}>WERT</option>
+          <option value="TEXT" ${parameter.value_prefix === "TEXT" ? "selected" : ""}>TEXT</option>
+        </select>
+      </div>
+      <div>
+        <label class="summary-label" for="scalar-input">Value</label>
+        <input id="scalar-input" type="text" value="${escapeHtml(parameter.value)}" />
+      </div>
     `;
     els.editorSlot.appendChild(wrapper);
+    wrapper.querySelector("#scalar-prefix").addEventListener("change", (event) => {
+      commitChange(() => {
+        state.current.get(parameter.name).value_prefix = event.target.value;
+      }, `Updated ${parameter.name} value field`);
+    });
     wrapper.querySelector("#scalar-input").addEventListener("change", (event) => {
       commitChange(() => {
         state.current.get(parameter.name).value = event.target.value;
@@ -1219,8 +1243,8 @@ function renderVisualization(parameter, original) {
     els.visualHint.textContent = "Single calibration value";
     els.visualSlot.innerHTML = `
       <div class="compare-grid">
-        <div class="compare-pill">Previous: ${escapeHtml(original.value)}</div>
-        <div class="compare-pill">Current: ${escapeHtml(parameter.value)}</div>
+        <div class="compare-pill">Previous: ${escapeHtml(`${original.value_prefix || ""} ${original.value}`.trim())}</div>
+        <div class="compare-pill">Current: ${escapeHtml(`${parameter.value_prefix || ""} ${parameter.value}`.trim())}</div>
       </div>
     `;
     return;
@@ -1291,7 +1315,18 @@ function renderComparison(parameter) {
     table.className = "compare-table";
     table.innerHTML = `
       <thead><tr><th>Field</th><th>Baseline</th><th>Current</th></tr></thead>
-      <tbody><tr class="${parameter.value !== baseline.value ? "changed-cell" : ""}"><td>Value</td><td>${escapeHtml(baseline.value)}</td><td>${escapeHtml(parameter.value)}</td></tr></tbody>
+      <tbody>
+        <tr class="${parameter.value_prefix !== baseline.value_prefix ? "changed-cell" : ""}">
+          <td>Value Field</td>
+          <td>${escapeHtml(baseline.value_prefix || "")}</td>
+          <td>${escapeHtml(parameter.value_prefix || "")}</td>
+        </tr>
+        <tr class="${parameter.value !== baseline.value ? "changed-cell" : ""}">
+          <td>Value</td>
+          <td>${escapeHtml(baseline.value)}</td>
+          <td>${escapeHtml(parameter.value)}</td>
+        </tr>
+      </tbody>
     `;
     els.compareSlot.appendChild(table);
     appendMetadataComparison(parameter, baseline);
@@ -2002,6 +2037,7 @@ function makeCsvRows(mode = "all") {
     };
 
     if (current.kind === "scalar") {
+      pushRow("value_prefix", { baselineValue: baseline.value_prefix, value: current.value_prefix });
       pushRow("value", { baselineValue: baseline.value, value: current.value });
     }
 
@@ -2117,6 +2153,17 @@ function applyCsvRowToParameter(parameter, row) {
       throw new Error(`${parameter.name}: field "value" is only valid for scalar parameters`);
     }
     parameter.value = value;
+    return;
+  }
+
+  if (field === "value_prefix") {
+    if (parameter.kind !== "scalar") {
+      throw new Error(`${parameter.name}: field "value_prefix" is only valid for scalar parameters`);
+    }
+    if (!["WERT", "TEXT"].includes(value)) {
+      throw new Error(`${parameter.name}: value_prefix must be WERT or TEXT`);
+    }
+    parameter.value_prefix = value;
     return;
   }
 
@@ -2284,6 +2331,7 @@ function makeDiffReport() {
     if (current.kind === "scalar") {
       lines.push("| Field | Baseline | Current |");
       lines.push("| --- | --- | --- |");
+      lines.push(`| value_prefix | ${baseline.value_prefix || ""} | ${current.value_prefix || ""} |`);
       lines.push(`| value | ${baseline.value} | ${current.value} |`);
       lines.push("");
     }
@@ -2536,18 +2584,37 @@ async function saveDocumentToPath(outputPath = null) {
   }
 }
 
+async function selectOutputFolder() {
+  const initialPath = state.outputFolderPath || (hasPathDirectory(state.filePath) ? state.filePath : "");
+  try {
+    const payload = await api("/api/select-output-folder", {
+      method: "POST",
+      body: JSON.stringify({ initial_path: initialPath }),
+    });
+    if (!payload.path) {
+      return false;
+    }
+    state.outputFolderPath = payload.path;
+    showStatus(`Output folder set to ${payload.path}`, "success");
+    renderButtons();
+    return true;
+  } catch (error) {
+    showStatus(error.message, "error");
+    return false;
+  }
+}
+
 async function saveAsDocument() {
   if (!state.filePath || !parameterNames().length) {
     showStatus("Load a DCM file before using Save As.", "error");
     return;
   }
   if (state.sourceMode === "upload" && !hasPathDirectory(state.filePath) && !state.outputFolderPath) {
-    const folderPath = window.prompt("Output folder path:");
-    if (!folderPath) {
-      showStatus("Provide an output folder path before saving a file opened from the file picker.", "error");
+    const selected = await selectOutputFolder();
+    if (!selected) {
+      showStatus("Select an output folder before saving a file opened from the file picker.", "error");
       return;
     }
-    state.outputFolderPath = folderPath.trim();
   }
   const suggestedPath = suggestSaveAsPath(state.filePath);
   const outputPath = window.prompt("Save DCM as:", suggestedPath);
@@ -2739,6 +2806,7 @@ els.sampleFile.addEventListener("click", loadSamplePath);
 els.loadFile.addEventListener("click", () => loadDocument());
 els.saveAsFile.addEventListener("click", saveAsDocument);
 els.saveFile.addEventListener("click", saveDocument);
+els.selectOutputFolder.addEventListener("click", selectOutputFolder);
 els.addParameter.addEventListener("click", addParameter);
 els.deleteParameter.addEventListener("click", deleteSelectedParameter);
 els.contextAddParameter.addEventListener("click", () => {

@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 from hashlib import sha256
 from http import HTTPStatus
@@ -50,6 +52,37 @@ class AppState:
         payload = document.to_payload()
         payload["source_mode"] = "upload"
         return payload
+
+    def select_output_folder(self, initial_path: str = "") -> dict:
+        initial = self.resolve_path(initial_path) if initial_path else self.root_dir
+        if initial.is_file():
+            initial = initial.parent
+
+        if sys.platform == "darwin":
+            script = 'POSIX path of (choose folder with prompt "Select output folder"'
+            if initial.exists():
+                escaped_initial = str(initial).replace('"', '\\"')
+                script += f' default location POSIX file "{escaped_initial}"'
+            script += ")"
+            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return {"path": ""}
+            return {"path": result.stdout.strip().rstrip("/")}
+
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError as error:
+            raise ValidationError("Folder selection is not available in this Python environment.") from error
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            selected = filedialog.askdirectory(initialdir=str(initial if initial.exists() else self.root_dir))
+            return {"path": selected}
+        finally:
+            root.destroy()
 
     def save_document(
         self,
@@ -175,6 +208,10 @@ class DcmRequestHandler(BaseHTTPRequestHandler):
                 display_name = payload.get("display_name", "")
                 text = payload.get("text", "")
                 self._send_json(self.state.load_document_text(display_name, text))
+                return
+            if parsed.path == "/api/select-output-folder":
+                initial_path = payload.get("initial_path", "")
+                self._send_json(self.state.select_output_folder(initial_path))
                 return
             if parsed.path == "/api/save":
                 path = payload.get("path", "")

@@ -239,7 +239,7 @@ class ParameterBlock:
             if not isinstance(incoming_rows, list) or len(incoming_rows) != len(original_rows):
                 raise ValidationError(f"Map {self.name} must preserve row count")
             normalized_rows: list[list[str]] = []
-            for index, (incoming_row, original_row) in enumerate(zip(incoming_rows, original_rows, strict=True)):
+            for index, (incoming_row, original_row) in enumerate(zip(incoming_rows, original_rows)):
                 if not isinstance(incoming_row, list) or len(incoming_row) != len(original_row):
                     raise ValidationError(f"Map {self.name} row {index} must preserve column count")
                 normalized_rows.append([str(item) for item in incoming_row])
@@ -265,7 +265,7 @@ class ParameterBlock:
         if not isinstance(incoming_metadata, list) or len(incoming_metadata) != len(metadata_items):
             raise ValidationError(f"{self.name}.metadata must preserve its original structure")
 
-        for index, (incoming_item, body_item) in enumerate(zip(incoming_metadata, metadata_items, strict=True)):
+        for index, (incoming_item, body_item) in enumerate(zip(incoming_metadata, metadata_items)):
             if not isinstance(incoming_item, dict):
                 raise ValidationError(f"{self.name}.metadata[{index}] must be an object")
             if incoming_item.get("key") != body_item.prefix:
@@ -607,20 +607,28 @@ class DcmDocument:
 
 def _count_parameter_changes(current: ParameterBlock, baseline: ParameterBlock) -> int:
     if current.kind == "scalar":
-        return int((current.scalar_value or "") != (baseline.scalar_value or ""))
+        return int(current.scalar_value_prefix != baseline.scalar_value_prefix) + int(
+            (current.scalar_value or "") != (baseline.scalar_value or "")
+        )
     if current.kind == "list":
-        return sum(1 for left, right in zip(current.values or [], baseline.values or [], strict=True) if left != right)
+        return _count_sequence_changes(current.values or [], baseline.values or [])
     if current.kind == "axis":
-        return sum(1 for left, right in zip(current.x_axis or [], baseline.x_axis or [], strict=True) if left != right)
+        return _count_sequence_changes(current.x_axis or [], baseline.x_axis or [])
     if current.kind == "curve":
-        x_changes = sum(1 for left, right in zip(current.x_axis or [], baseline.x_axis or [], strict=True) if left != right)
-        value_changes = sum(1 for left, right in zip(current.values or [], baseline.values or [], strict=True) if left != right)
+        x_changes = _count_sequence_changes(current.x_axis or [], baseline.x_axis or [])
+        value_changes = _count_sequence_changes(current.values or [], baseline.values or [])
         return x_changes + value_changes
     if current.kind == "map":
-        x_changes = sum(1 for left, right in zip(current.x_axis or [], baseline.x_axis or [], strict=True) if left != right)
-        y_changes = sum(1 for left, right in zip(current.y_axis or [], baseline.y_axis or [], strict=True) if left != right)
+        x_changes = _count_sequence_changes(current.x_axis or [], baseline.x_axis or [])
+        y_changes = _count_sequence_changes(current.y_axis or [], baseline.y_axis or [])
         cell_changes = 0
-        for current_row, baseline_row in zip(current.map_values or [], baseline.map_values or [], strict=True):
-            cell_changes += sum(1 for left, right in zip(current_row, baseline_row, strict=True) if left != right)
+        for current_row, baseline_row in zip(current.map_values or [], baseline.map_values or []):
+            cell_changes += _count_sequence_changes(current_row, baseline_row)
+        cell_changes += abs(len(current.map_values or []) - len(baseline.map_values or []))
         return x_changes + y_changes + cell_changes
     return 0
+
+
+def _count_sequence_changes(current: list[str], baseline: list[str]) -> int:
+    changed = sum(1 for left, right in zip(current, baseline) if left != right)
+    return changed + abs(len(current) - len(baseline))
