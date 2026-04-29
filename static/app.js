@@ -1,3 +1,5 @@
+const MAX_HISTORY = 100;
+
 const state = {
   filePath: "",
   sourceHash: "",
@@ -5,10 +7,17 @@ const state = {
   original: new Map(),
   current: new Map(),
   selectedName: null,
+  documentIssues: [],
+  comparePath: "",
+  compareBaseline: new Map(),
+  compareIssues: [],
+  undoStack: [],
+  redoStack: [],
 };
 
 const els = {
   filePath: document.querySelector("#file-path"),
+  comparePath: document.querySelector("#compare-path"),
   fileList: document.querySelector("#file-list"),
   parameterList: document.querySelector("#parameter-list"),
   parameterSearch: document.querySelector("#parameter-search"),
@@ -17,7 +26,15 @@ const els = {
   summaryTotal: document.querySelector("#summary-total"),
   summaryChanged: document.querySelector("#summary-changed"),
   summarySelection: document.querySelector("#summary-selection"),
+  summaryCompare: document.querySelector("#summary-compare"),
+  summaryDirty: document.querySelector("#summary-dirty"),
   status: document.querySelector("#status"),
+  issuesPanel: document.querySelector("#issues-panel"),
+  issuesCount: document.querySelector("#issues-count"),
+  issuesList: document.querySelector("#issues-list"),
+  compareOverview: document.querySelector("#compare-overview"),
+  compareOverviewPath: document.querySelector("#compare-overview-path"),
+  compareOverviewBody: document.querySelector("#compare-overview-body"),
   emptyState: document.querySelector("#empty-state"),
   detailView: document.querySelector("#detail-view"),
   detailKind: document.querySelector("#detail-kind"),
@@ -30,8 +47,18 @@ const els = {
   compareSummary: document.querySelector("#compare-summary"),
   refreshFiles: document.querySelector("#refresh-files"),
   loadFile: document.querySelector("#load-file"),
+  saveAsFile: document.querySelector("#save-as-file"),
   saveFile: document.querySelector("#save-file"),
   sampleFile: document.querySelector("#sample-file"),
+  compareFile: document.querySelector("#compare-file"),
+  clearCompare: document.querySelector("#clear-compare"),
+  csvFileInput: document.querySelector("#csv-file-input"),
+  importCsv: document.querySelector("#import-csv"),
+  exportCsv: document.querySelector("#export-csv"),
+  exportChangedCsv: document.querySelector("#export-changed-csv"),
+  exportDiffReport: document.querySelector("#export-diff-report"),
+  undoChange: document.querySelector("#undo-change"),
+  redoChange: document.querySelector("#redo-change"),
   resetParameter: document.querySelector("#reset-parameter"),
 };
 
@@ -61,8 +88,99 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function parameterNames() {
-  return [...state.current.keys()];
+function parameterNames(map = state.current) {
+  return [...map.keys()];
+}
+
+function collectParameters(map = state.current) {
+  return parameterNames(map).map((name) => deepClone(map.get(name)));
+}
+
+function snapshotState() {
+  return {
+    parameters: collectParameters(),
+    selectedName: state.selectedName,
+  };
+}
+
+function restoreSnapshot(snapshot) {
+  state.current = new Map(snapshot.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
+  state.selectedName = snapshot.selectedName && state.current.has(snapshot.selectedName)
+    ? snapshot.selectedName
+    : snapshot.parameters[0]?.name || null;
+}
+
+function pushUndoSnapshot(snapshot) {
+  state.undoStack.push(deepClone(snapshot));
+  if (state.undoStack.length > MAX_HISTORY) {
+    state.undoStack.shift();
+  }
+}
+
+function snapshotEquals(left, right) {
+  return JSON.stringify(left.parameters) === JSON.stringify(right.parameters)
+    && left.selectedName === right.selectedName;
+}
+
+function commitChange(mutator, statusMessage = "") {
+  const before = snapshotState();
+  mutator();
+  const after = snapshotState();
+  if (snapshotEquals(before, after)) {
+    return;
+  }
+  pushUndoSnapshot(before);
+  state.redoStack = [];
+  renderAll();
+  if (statusMessage) {
+    showStatus(statusMessage, "info");
+  }
+}
+
+function applyHistorySnapshot(snapshot, origin) {
+  const currentSnapshot = snapshotState();
+  restoreSnapshot(snapshot);
+  if (origin === "undo") {
+    state.redoStack.push(deepClone(currentSnapshot));
+  } else {
+    pushUndoSnapshot(currentSnapshot);
+  }
+  renderAll();
+}
+
+function baselineLabel() {
+  return state.comparePath || "Loaded snapshot";
+}
+
+function isDirty() {
+  return changedParameterCount() > 0;
+}
+
+function isNumericLike(value) {
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return false;
+  }
+  return Number.isFinite(Number(normalized));
+}
+
+function countMetadataChanges(current, baseline) {
+  const currentMetadata = current.metadata || [];
+  const baselineMetadata = baseline.metadata || [];
+  const length = Math.max(currentMetadata.length, baselineMetadata.length);
+  let changed = 0;
+  for (let index = 0; index < length; index += 1) {
+    const currentItem = currentMetadata[index];
+    const baselineItem = baselineMetadata[index];
+    if (!currentItem || !baselineItem) {
+      changed += 1;
+      continue;
+    }
+    if (currentItem.key !== baselineItem.key || currentItem.value !== baselineItem.value) {
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 function diffParameter(current, original) {
@@ -71,29 +189,30 @@ function diffParameter(current, original) {
     return result;
   }
 
+  if (current.kind !== original.kind) {
+    return { changed: true, changedCells: 1, notes: ["Parameter kind changed"] };
+  }
+
+  const dataChangedCellsBeforeMetadata = () => result.changedCells - countMetadataChanges(current, original);
+
   if (current.kind === "scalar") {
     result.changed = current.value !== original.value;
     result.changedCells = result.changed ? 1 : 0;
-    if (result.changed) {
-      result.notes.push("Value changed");
-    }
-    return result;
-  }
-
-  if (current.kind === "list") {
+  } else if (current.kind === "list") {
     current.values.forEach((value, index) => {
       if (value !== original.values[index]) {
         result.changed = true;
         result.changedCells += 1;
       }
     });
-    if (result.changed) {
-      result.notes.push(`${result.changedCells} value(s) changed`);
-    }
-    return result;
-  }
-
-  if (current.kind === "curve") {
+  } else if (current.kind === "axis") {
+    current.x_axis.forEach((value, index) => {
+      if (value !== original.x_axis[index]) {
+        result.changed = true;
+        result.changedCells += 1;
+      }
+    });
+  } else if (current.kind === "curve") {
     current.x_axis.forEach((value, index) => {
       if (value !== original.x_axis[index]) {
         result.changed = true;
@@ -106,13 +225,7 @@ function diffParameter(current, original) {
         result.changedCells += 1;
       }
     });
-    if (result.changed) {
-      result.notes.push(`${result.changedCells} axis/value item(s) changed`);
-    }
-    return result;
-  }
-
-  if (current.kind === "map") {
+  } else if (current.kind === "map") {
     current.x_axis.forEach((value, index) => {
       if (value !== original.x_axis[index]) {
         result.changed = true;
@@ -133,10 +246,30 @@ function diffParameter(current, original) {
         }
       });
     });
-    if (result.changed) {
-      result.notes.push(`${result.changedCells} axis/cell item(s) changed`);
+  }
+
+  const metadataChanges = countMetadataChanges(current, original);
+  if (metadataChanges) {
+    result.changed = true;
+    result.changedCells += metadataChanges;
+  }
+
+  if (result.changed) {
+    const dataChangedCells = dataChangedCellsBeforeMetadata();
+    if (current.kind === "scalar" && dataChangedCells > 0) {
+      result.notes.push("Value changed");
+    } else if (current.kind === "list" && dataChangedCells > 0) {
+      result.notes.push(`${dataChangedCells} value item(s) changed`);
+    } else if (current.kind === "axis" && dataChangedCells > 0) {
+      result.notes.push(`${dataChangedCells} axis item(s) changed`);
+    } else if (current.kind === "curve" && dataChangedCells > 0) {
+      result.notes.push(`${dataChangedCells} axis/value item(s) changed`);
+    } else if (current.kind === "map" && dataChangedCells > 0) {
+      result.notes.push(`${dataChangedCells} axis/cell item(s) changed`);
     }
-    return result;
+    if (metadataChanges) {
+      result.notes.push(`${metadataChanges} metadata field(s) changed`);
+    }
   }
 
   return result;
@@ -146,21 +279,164 @@ function changedParameterCount() {
   return parameterNames().filter((name) => diffParameter(state.current.get(name), state.original.get(name)).changed).length;
 }
 
+function collectValidationIssues() {
+  const issues = [...state.documentIssues];
+  for (const name of parameterNames()) {
+    const current = state.current.get(name);
+    const original = state.original.get(name);
+    if (!current || !original) {
+      continue;
+    }
+
+    if (current.kind === "scalar" && isNumericLike(original.value) && !isNumericLike(current.value)) {
+      issues.push({ parameter: name, message: "Value must stay numeric" });
+    }
+
+    if (current.kind === "list") {
+      current.values.forEach((value, index) => {
+        if (isNumericLike(original.values[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `values[${index}] must stay numeric` });
+        }
+      });
+    }
+
+    if (current.kind === "axis") {
+      current.x_axis.forEach((value, index) => {
+        if (isNumericLike(original.x_axis[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `x_axis[${index}] must stay numeric` });
+        }
+      });
+    }
+
+    if (current.kind === "curve") {
+      if (current.values.length !== current.x_axis.length) {
+        issues.push({ parameter: name, message: "ST/X and WERT lengths do not match" });
+      }
+      current.x_axis.forEach((value, index) => {
+        if (isNumericLike(original.x_axis[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `x_axis[${index}] must stay numeric` });
+        }
+      });
+      current.values.forEach((value, index) => {
+        if (isNumericLike(original.values[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `values[${index}] must stay numeric` });
+        }
+      });
+    }
+
+    if (current.kind === "map") {
+      if (current.map_values.length !== current.y_axis.length) {
+        issues.push({ parameter: name, message: "ST/Y length and map row count do not match" });
+      }
+      current.x_axis.forEach((value, index) => {
+        if (isNumericLike(original.x_axis[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `x_axis[${index}] must stay numeric` });
+        }
+      });
+      current.y_axis.forEach((value, index) => {
+        if (isNumericLike(original.y_axis[index]) && !isNumericLike(value)) {
+          issues.push({ parameter: name, message: `y_axis[${index}] must stay numeric` });
+        }
+      });
+      current.map_values.forEach((row, rowIndex) => {
+        if (row.length !== current.x_axis.length) {
+          issues.push({ parameter: name, message: `row ${rowIndex} length does not match ST/X length` });
+        }
+        row.forEach((value, columnIndex) => {
+          if (isNumericLike(original.map_values[rowIndex][columnIndex]) && !isNumericLike(value)) {
+            issues.push({ parameter: name, message: `map_values[${rowIndex}][${columnIndex}] must stay numeric` });
+          }
+        });
+      });
+    }
+  }
+  return issues;
+}
+
+function computeCompareOverview() {
+  if (!state.comparePath || !state.compareBaseline.size) {
+    return null;
+  }
+
+  const names = new Set([...parameterNames(), ...parameterNames(state.compareBaseline)]);
+  const rows = [];
+  const summary = { changed: 0, added: 0, removed: 0, unchanged: 0 };
+
+  [...names].sort().forEach((name) => {
+    const current = state.current.get(name);
+    const baseline = state.compareBaseline.get(name);
+
+    if (!baseline) {
+      summary.added += 1;
+      rows.push({ name, status: "missing_in_compare", note: "Only in current file" });
+      return;
+    }
+
+    if (!current) {
+      summary.removed += 1;
+      rows.push({ name, status: "missing_in_current", note: "Missing from current file" });
+      return;
+    }
+
+    if (current.kind !== baseline.kind) {
+      summary.changed += 1;
+      rows.push({ name, status: "kind_changed", note: `${baseline.kind} -> ${current.kind}` });
+      return;
+    }
+
+    const diff = diffParameter(current, baseline);
+    if (diff.changed) {
+      summary.changed += 1;
+      rows.push({ name, status: "changed", note: diff.notes.join(" · ") || `${diff.changedCells} item(s) changed` });
+      return;
+    }
+
+    summary.unchanged += 1;
+    rows.push({ name, status: "unchanged", note: "No changes" });
+  });
+
+  return { summary, rows };
+}
+
+function activeCompareBaseline(name) {
+  if (state.comparePath && state.compareBaseline.has(name)) {
+    return state.compareBaseline.get(name);
+  }
+  return state.original.get(name);
+}
+
 function setDocument(payload) {
   state.filePath = payload.path;
   state.sourceHash = payload.source_hash;
   state.original = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
   state.current = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
   state.selectedName = payload.parameters[0]?.name || null;
+  state.documentIssues = payload.validation_issues || [];
+  state.undoStack = [];
+  state.redoStack = [];
+  clearCompare();
   els.filePath.value = payload.path;
   renderAll();
+}
+
+function clearCompare(render = false) {
+  state.comparePath = "";
+  state.compareBaseline = new Map();
+  state.compareIssues = [];
+  els.comparePath.value = "";
+  if (render) {
+    renderAll();
+  }
 }
 
 function renderAll() {
   renderFiles();
   renderParameterList();
   renderSummary();
+  renderIssues();
+  renderCompareOverview();
   renderDetail();
+  renderButtons();
 }
 
 function renderFiles() {
@@ -215,6 +491,75 @@ function renderSummary() {
   els.summaryTotal.textContent = String(parameterNames().length);
   els.summaryChanged.textContent = String(changedParameterCount());
   els.summarySelection.textContent = state.selectedName || "None";
+  els.summaryCompare.textContent = baselineLabel();
+  els.summaryDirty.textContent = isDirty() ? "Unsaved changes" : "Clean";
+}
+
+function renderIssues() {
+  const issues = collectValidationIssues();
+  els.issuesCount.textContent = String(issues.length);
+  if (!issues.length) {
+    els.issuesPanel.classList.add("hidden");
+    els.issuesList.innerHTML = "";
+    return;
+  }
+
+  els.issuesPanel.classList.remove("hidden");
+  els.issuesList.innerHTML = "";
+  issues.forEach((issue) => {
+    const item = document.createElement("div");
+    item.className = "issue-item";
+    item.innerHTML = `<strong>${escapeHtml(issue.parameter)}</strong><span>${escapeHtml(issue.message)}</span>`;
+    els.issuesList.appendChild(item);
+  });
+}
+
+function renderCompareOverview() {
+  const overview = computeCompareOverview();
+  if (!overview) {
+    els.compareOverview.classList.add("hidden");
+    els.compareOverviewBody.innerHTML = "";
+    els.compareOverviewPath.textContent = "";
+    return;
+  }
+
+  els.compareOverview.classList.remove("hidden");
+  els.compareOverviewPath.textContent = state.comparePath;
+  const topRows = overview.rows.filter((row) => row.status !== "unchanged").slice(0, 15);
+  const summaryCards = `
+    <div class="compare-grid">
+      <div class="compare-pill">Changed: ${overview.summary.changed}</div>
+      <div class="compare-pill">Only in current: ${overview.summary.added}</div>
+      <div class="compare-pill">Only in compare: ${overview.summary.removed}</div>
+      <div class="compare-pill">Unchanged: ${overview.summary.unchanged}</div>
+    </div>
+  `;
+  const listMarkup = topRows.length
+    ? `<div class="compare-overview-list">${topRows
+        .map((row) => `
+          <div class="compare-overview-item">
+            <div><strong>${escapeHtml(row.name)}</strong><br><span class="muted">${escapeHtml(row.note)}</span></div>
+            <span class="compare-status">${escapeHtml(row.status.replaceAll("_", " "))}</span>
+          </div>
+        `)
+        .join("")}</div>`
+    : '<p class="muted">No parameter differences between the current editor state and the compare file.</p>';
+  els.compareOverviewBody.innerHTML = `${summaryCards}${listMarkup}`;
+}
+
+function renderButtons() {
+  const issues = collectValidationIssues();
+  const hasDocument = Boolean(state.filePath && parameterNames().length);
+  els.saveFile.disabled = !state.filePath || !parameterNames().length || issues.length > 0;
+  els.saveAsFile.disabled = !state.filePath || !parameterNames().length || issues.length > 0;
+  els.compareFile.disabled = !state.filePath || !parameterNames().length || !els.comparePath.value.trim();
+  els.clearCompare.disabled = !state.comparePath;
+  els.importCsv.disabled = !hasDocument;
+  els.exportCsv.disabled = !hasDocument;
+  els.exportChangedCsv.disabled = !hasDocument || changedParameterCount() === 0;
+  els.exportDiffReport.disabled = !hasDocument;
+  els.undoChange.disabled = state.undoStack.length === 0;
+  els.redoChange.disabled = state.redoStack.length === 0;
 }
 
 function renderDetail() {
@@ -230,10 +575,12 @@ function renderDetail() {
   els.detailView.classList.remove("hidden");
   els.detailKind.textContent = parameter.keyword;
   els.detailName.textContent = parameter.name;
-  els.lineRange.textContent = `Lines ${parameter.line_range.start}-${parameter.line_range.end}`;
+  els.lineRange.textContent = parameter.header_suffix
+    ? `Lines ${parameter.line_range.start}-${parameter.line_range.end} · ${parameter.header_suffix}`
+    : `Lines ${parameter.line_range.start}-${parameter.line_range.end}`;
   renderEditor(parameter, original);
   renderVisualization(parameter, original);
-  renderComparison(parameter, original);
+  renderComparison(parameter);
 }
 
 function renderEditor(parameter, original) {
@@ -243,13 +590,14 @@ function renderEditor(parameter, original) {
     wrapper.innerHTML = `
       <label class="summary-label">Value</label>
       <input id="scalar-input" type="text" value="${escapeHtml(parameter.value)}" />
-      ${renderMetadata(parameter)}
     `;
     els.editorSlot.appendChild(wrapper);
     wrapper.querySelector("#scalar-input").addEventListener("change", (event) => {
-      parameter.value = event.target.value;
-      renderAll();
+      commitChange(() => {
+        state.current.get(parameter.name).value = event.target.value;
+      }, `Updated ${parameter.name}`);
     });
+    appendMetadataEditor(parameter, original);
     return;
   }
 
@@ -274,11 +622,44 @@ function renderEditor(parameter, original) {
       </tbody>
     `;
     wireInputs(table, "input[data-index]", (event) => {
-      parameter.values[Number(event.target.dataset.index)] = event.target.value;
-      renderAll();
+      const index = Number(event.target.dataset.index);
+      commitChange(() => {
+        state.current.get(parameter.name).values[index] = event.target.value;
+      }, `Updated ${parameter.name}[${index}]`);
     });
     els.editorSlot.appendChild(table);
-    appendMetadata(parameter);
+    appendMetadataEditor(parameter, original);
+    return;
+  }
+
+  if (parameter.kind === "axis") {
+    const table = document.createElement("table");
+    table.className = "editor-table";
+    table.innerHTML = `
+      <thead><tr><th>Index</th><th>Axis Value</th><th>Previous</th></tr></thead>
+      <tbody>
+        ${parameter.x_axis
+          .map((value, index) => {
+            const changed = value !== original.x_axis[index] ? "changed-cell" : "";
+            return `
+              <tr class="${changed}">
+                <td>${index}</td>
+                <td><input data-axis="${index}" type="text" value="${escapeHtml(value)}" /></td>
+                <td>${escapeHtml(original.x_axis[index])}</td>
+              </tr>
+            `;
+          })
+          .join("")}
+      </tbody>
+    `;
+    wireInputs(table, "input[data-axis]", (event) => {
+      const index = Number(event.target.dataset.axis);
+      commitChange(() => {
+        state.current.get(parameter.name).x_axis[index] = event.target.value;
+      }, `Updated ${parameter.name} axis ${index}`);
+    });
+    els.editorSlot.appendChild(table);
+    appendMetadataEditor(parameter, original);
     return;
   }
 
@@ -304,15 +685,19 @@ function renderEditor(parameter, original) {
       </tbody>
     `;
     wireInputs(table, "input[data-axis]", (event) => {
-      parameter.x_axis[Number(event.target.dataset.axis)] = event.target.value;
-      renderAll();
+      const index = Number(event.target.dataset.axis);
+      commitChange(() => {
+        state.current.get(parameter.name).x_axis[index] = event.target.value;
+      }, `Updated ${parameter.name} X-axis ${index}`);
     });
     wireInputs(table, "input[data-value]", (event) => {
-      parameter.values[Number(event.target.dataset.value)] = event.target.value;
-      renderAll();
+      const index = Number(event.target.dataset.value);
+      commitChange(() => {
+        state.current.get(parameter.name).values[index] = event.target.value;
+      }, `Updated ${parameter.name} value ${index}`);
     });
     els.editorSlot.appendChild(table);
-    appendMetadata(parameter);
+    appendMetadataEditor(parameter, original);
     return;
   }
 
@@ -340,21 +725,26 @@ function renderEditor(parameter, original) {
       .join("");
     table.innerHTML = `<thead><tr><th>Y \\ X</th>${header}</tr></thead><tbody>${rows}</tbody>`;
     wireInputs(table, "input[data-x]", (event) => {
-      parameter.x_axis[Number(event.target.dataset.x)] = event.target.value;
-      renderAll();
+      const index = Number(event.target.dataset.x);
+      commitChange(() => {
+        state.current.get(parameter.name).x_axis[index] = event.target.value;
+      }, `Updated ${parameter.name} X-axis ${index}`);
     });
     wireInputs(table, "input[data-y]", (event) => {
-      parameter.y_axis[Number(event.target.dataset.y)] = event.target.value;
-      renderAll();
+      const index = Number(event.target.dataset.y);
+      commitChange(() => {
+        state.current.get(parameter.name).y_axis[index] = event.target.value;
+      }, `Updated ${parameter.name} Y-axis ${index}`);
     });
     wireInputs(table, "input[data-row]", (event) => {
       const row = Number(event.target.dataset.row);
       const column = Number(event.target.dataset.column);
-      parameter.map_values[row][column] = event.target.value;
-      renderAll();
+      commitChange(() => {
+        state.current.get(parameter.name).map_values[row][column] = event.target.value;
+      }, `Updated ${parameter.name}[${row},${column}]`);
     });
     els.editorSlot.appendChild(table);
-    appendMetadata(parameter);
+    appendMetadataEditor(parameter, original);
   }
 }
 
@@ -373,16 +763,20 @@ function renderVisualization(parameter, original) {
     return;
   }
 
-  if (parameter.kind === "list" || parameter.kind === "curve") {
-    const xValues = parameter.kind === "curve" ? parameter.x_axis : parameter.values.map((_, index) => String(index));
-    const yValues = parameter.values;
+  if (parameter.kind === "list" || parameter.kind === "axis" || parameter.kind === "curve") {
+    const xValues = parameter.kind === "curve"
+      ? parameter.x_axis
+      : parameter.kind === "axis"
+        ? parameter.x_axis.map((_, index) => String(index))
+        : parameter.values.map((_, index) => String(index));
+    const yValues = parameter.kind === "axis" ? parameter.x_axis : parameter.values;
     const chartMarkup = renderLineChart(xValues, yValues);
-    els.visualHint.textContent = parameter.kind === "curve" ? "X-axis vs value curve" : "Index vs value trend";
-    els.visualSlot.innerHTML = `
-      <div class="viz-wrapper">
-        ${chartMarkup}
-      </div>
-    `;
+    els.visualHint.textContent = parameter.kind === "curve"
+      ? "X-axis vs value curve"
+      : parameter.kind === "axis"
+        ? "Axis index vs axis value trend"
+        : "Index vs value trend";
+    els.visualSlot.innerHTML = `<div class="viz-wrapper">${chartMarkup}</div>`;
     return;
   }
 
@@ -392,15 +786,24 @@ function renderVisualization(parameter, original) {
   }
 }
 
-function renderComparison(parameter, original) {
-  const diff = diffParameter(parameter, original);
+function renderComparison(parameter) {
+  const baseline = activeCompareBaseline(parameter.name);
+  const usingExternalBaseline = state.comparePath && state.compareBaseline.has(parameter.name);
+
+  if (!baseline) {
+    els.compareSummary.textContent = "Parameter does not exist in the selected compare baseline";
+    els.compareSlot.innerHTML = '<p class="muted">No matching parameter exists in the selected compare file.</p>';
+    return;
+  }
+
+  const diff = diffParameter(parameter, baseline);
   els.compareSummary.textContent = diff.changed ? diff.notes.join(" · ") : "No changes";
   els.compareSlot.innerHTML = "";
 
   const summary = document.createElement("div");
   summary.className = "compare-grid";
   summary.innerHTML = `
-    <div class="compare-pill">Previous snapshot preserved from file load</div>
+    <div class="compare-pill">Baseline: ${escapeHtml(usingExternalBaseline ? state.comparePath : "Loaded snapshot")}</div>
     <div class="compare-pill">Changed items: ${diff.changedCells}</div>
   `;
   els.compareSlot.appendChild(summary);
@@ -409,10 +812,11 @@ function renderComparison(parameter, original) {
     const table = document.createElement("table");
     table.className = "compare-table";
     table.innerHTML = `
-      <thead><tr><th>Field</th><th>Previous</th><th>Current</th></tr></thead>
-      <tbody><tr class="${parameter.value !== original.value ? "changed-cell" : ""}"><td>Value</td><td>${escapeHtml(original.value)}</td><td>${escapeHtml(parameter.value)}</td></tr></tbody>
+      <thead><tr><th>Field</th><th>Baseline</th><th>Current</th></tr></thead>
+      <tbody><tr class="${parameter.value !== baseline.value ? "changed-cell" : ""}"><td>Value</td><td>${escapeHtml(baseline.value)}</td><td>${escapeHtml(parameter.value)}</td></tr></tbody>
     `;
     els.compareSlot.appendChild(table);
+    appendMetadataComparison(parameter, baseline);
     return;
   }
 
@@ -420,20 +824,43 @@ function renderComparison(parameter, original) {
     const table = document.createElement("table");
     table.className = "compare-table";
     table.innerHTML = `
-      <thead><tr><th>Index</th><th>Previous</th><th>Current</th><th>Changed</th></tr></thead>
+      <thead><tr><th>Index</th><th>Baseline</th><th>Current</th><th>Changed</th></tr></thead>
       <tbody>
         ${parameter.values
           .map((value, index) => `
-            <tr class="${value !== original.values[index] ? "changed-cell" : ""}">
+            <tr class="${value !== baseline.values[index] ? "changed-cell" : ""}">
               <td>${index}</td>
-              <td>${escapeHtml(original.values[index])}</td>
+              <td>${escapeHtml(baseline.values[index])}</td>
               <td>${escapeHtml(value)}</td>
-              <td class="delta-cell">${value !== original.values[index] ? "Yes" : "No"}</td>
+              <td class="delta-cell">${value !== baseline.values[index] ? "Yes" : "No"}</td>
             </tr>`)
           .join("")}
       </tbody>
     `;
     els.compareSlot.appendChild(table);
+    appendMetadataComparison(parameter, baseline);
+    return;
+  }
+
+  if (parameter.kind === "axis") {
+    const table = document.createElement("table");
+    table.className = "compare-table";
+    table.innerHTML = `
+      <thead><tr><th>Index</th><th>Baseline</th><th>Current</th><th>Changed</th></tr></thead>
+      <tbody>
+        ${parameter.x_axis
+          .map((value, index) => `
+            <tr class="${value !== baseline.x_axis[index] ? "changed-cell" : ""}">
+              <td>${index}</td>
+              <td>${escapeHtml(baseline.x_axis[index])}</td>
+              <td>${escapeHtml(value)}</td>
+              <td class="delta-cell">${value !== baseline.x_axis[index] ? "Yes" : "No"}</td>
+            </tr>`)
+          .join("")}
+      </tbody>
+    `;
+    els.compareSlot.appendChild(table);
+    appendMetadataComparison(parameter, baseline);
     return;
   }
 
@@ -441,11 +868,11 @@ function renderComparison(parameter, original) {
     const table = document.createElement("table");
     table.className = "compare-table";
     table.innerHTML = `
-      <thead><tr><th>Index</th><th>Previous</th><th>Current</th></tr></thead>
+      <thead><tr><th>Index</th><th>Baseline</th><th>Current</th></tr></thead>
       <tbody>
         ${parameter.values
           .map((value, index) => {
-            const previous = `${original.x_axis[index]} -> ${original.values[index]}`;
+            const previous = `${baseline.x_axis[index]} -> ${baseline.values[index]}`;
             const current = `${parameter.x_axis[index]} -> ${value}`;
             const changed = previous !== current ? "changed-cell" : "";
             return `<tr class="${changed}"><td>${index}</td><td>${escapeHtml(previous)}</td><td>${escapeHtml(current)}</td></tr>`;
@@ -454,6 +881,7 @@ function renderComparison(parameter, original) {
       </tbody>
     `;
     els.compareSlot.appendChild(table);
+    appendMetadataComparison(parameter, baseline);
     return;
   }
 
@@ -461,20 +889,21 @@ function renderComparison(parameter, original) {
     const table = document.createElement("table");
     table.className = "compare-table";
     const head = parameter.x_axis.map((value, columnIndex) => {
-      const changed = value !== original.x_axis[columnIndex] ? "changed-cell" : "";
-      return `<th class="${changed}">${escapeHtml(`${original.x_axis[columnIndex]} -> ${value}`)}</th>`;
+      const changed = value !== baseline.x_axis[columnIndex] ? "changed-cell" : "";
+      return `<th class="${changed}">${escapeHtml(`${baseline.x_axis[columnIndex]} -> ${value}`)}</th>`;
     }).join("");
     const body = parameter.map_values.map((row, rowIndex) => {
-      const yChanged = parameter.y_axis[rowIndex] !== original.y_axis[rowIndex] ? "changed-cell" : "";
+      const yChanged = parameter.y_axis[rowIndex] !== baseline.y_axis[rowIndex] ? "changed-cell" : "";
       const cells = row.map((value, columnIndex) => {
-        const previous = original.map_values[rowIndex][columnIndex];
+        const previous = baseline.map_values[rowIndex][columnIndex];
         const changed = value !== previous ? "changed-cell" : "";
         return `<td class="${changed}">${escapeHtml(`${previous} -> ${value}`)}</td>`;
       }).join("");
-      return `<tr><th class="${yChanged}">${escapeHtml(`${original.y_axis[rowIndex]} -> ${parameter.y_axis[rowIndex]}`)}</th>${cells}</tr>`;
+      return `<tr><th class="${yChanged}">${escapeHtml(`${baseline.y_axis[rowIndex]} -> ${parameter.y_axis[rowIndex]}`)}</th>${cells}</tr>`;
     }).join("");
     table.innerHTML = `<thead><tr><th>Y \\ X</th>${head}</tr></thead><tbody>${body}</tbody>`;
     els.compareSlot.appendChild(table);
+    appendMetadataComparison(parameter, baseline);
   }
 }
 
@@ -552,20 +981,87 @@ function renderLineChart(labels, values) {
   `;
 }
 
-function appendMetadata(parameter) {
-  if (!parameter.metadata.length) {
+function appendMetadataEditor(parameter, baseline) {
+  const metadata = parameter.metadata || [];
+  if (metadata.length) {
+    const section = document.createElement("div");
+    section.className = "metadata";
+    section.innerHTML = `
+      <div class="panel-header">
+        <strong>Metadata</strong>
+        <span class="muted">${metadata.length} field(s)</span>
+      </div>
+      <table class="compare-table">
+        <thead><tr><th>Key</th><th>Value</th><th>Baseline</th></tr></thead>
+        <tbody>
+          ${metadata
+            .map((item, index) => {
+              const baselineValue = baseline.metadata?.[index]?.value || "";
+              const changed = item.value !== baselineValue ? "changed-cell" : "";
+              return `
+                <tr class="${changed}">
+                  <td>${escapeHtml(item.key)}</td>
+                  <td><input data-metadata-index="${index}" type="text" value="${escapeHtml(item.value)}" /></td>
+                  <td>${escapeHtml(baselineValue)}</td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    `;
+    wireInputs(section, "input[data-metadata-index]", (event) => {
+      const index = Number(event.target.dataset.metadataIndex);
+      commitChange(() => {
+        state.current.get(parameter.name).metadata[index].value = event.target.value;
+      }, `Updated ${parameter.name} metadata ${metadata[index].key}`);
+    });
+    els.editorSlot.appendChild(section);
+  }
+
+  appendRawLines(parameter);
+}
+
+function appendMetadataComparison(parameter, baseline) {
+  const metadata = parameter.metadata || [];
+  const baselineMetadata = baseline.metadata || [];
+  if (!metadata.length && !baselineMetadata.length) {
+    return;
+  }
+  const length = Math.max(metadata.length, baselineMetadata.length);
+  const table = document.createElement("table");
+  table.className = "compare-table";
+  table.innerHTML = `
+    <thead><tr><th>Metadata</th><th>Baseline</th><th>Current</th></tr></thead>
+    <tbody>
+      ${Array.from({ length }, (_, index) => {
+        const currentItem = metadata[index];
+        const baselineItem = baselineMetadata[index];
+        const label = currentItem?.key || baselineItem?.key || `Field ${index}`;
+        const baselineValue = baselineItem?.value || "";
+        const currentValue = currentItem?.value || "";
+        const changed = label !== (baselineItem?.key || label) || baselineValue !== currentValue ? "changed-cell" : "";
+        return `
+          <tr class="${changed}">
+            <td>${escapeHtml(label)}</td>
+            <td>${escapeHtml(baselineValue)}</td>
+            <td>${escapeHtml(currentValue)}</td>
+          </tr>
+        `;
+      }).join("")}
+    </tbody>
+  `;
+  els.compareSlot.appendChild(table);
+}
+
+function appendRawLines(parameter) {
+  if (!parameter.raw_lines?.length) {
     return;
   }
   const box = document.createElement("div");
   box.className = "metadata";
-  box.textContent = parameter.metadata.join("\n");
+  box.innerHTML = `<strong>Preserved Non-Editable Lines</strong>\n${escapeHtml(parameter.raw_lines.join("\n"))}`;
   els.editorSlot.appendChild(box);
-}
-
-function renderMetadata(parameter) {
-  return parameter.metadata.length
-    ? `<div class="metadata">${escapeHtml(parameter.metadata.join("\n"))}</div>`
-    : "";
 }
 
 function wireInputs(root, selector, handler, eventName = "change") {
@@ -580,8 +1076,454 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function collectParameters() {
-  return parameterNames().map((name) => state.current.get(name));
+function csvEscape(value) {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let currentRow = [];
+  let currentValue = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentValue += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      currentRow.push(currentValue);
+      currentValue = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && nextChar === "\n") {
+        index += 1;
+      }
+      currentRow.push(currentValue);
+      if (currentRow.some((cell) => cell !== "")) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentValue = "";
+      continue;
+    }
+
+    currentValue += char;
+  }
+
+  currentRow.push(currentValue);
+  if (currentRow.some((cell) => cell !== "")) {
+    rows.push(currentRow);
+  }
+  return rows;
+}
+
+function makeCsvRows(mode = "all") {
+  const rows = [];
+  const headers = ["parameter", "kind", "field", "index", "row", "column", "key", "baseline_value", "value"];
+  rows.push(headers);
+
+  parameterNames().forEach((name) => {
+    const current = state.current.get(name);
+    const baseline = state.original.get(name);
+    if (!current || !baseline) {
+      return;
+    }
+
+    const pushRow = (field, { index = "", row = "", column = "", key = "", baselineValue = "", value = "" } = {}) => {
+      if (mode === "changed" && String(baselineValue) === String(value)) {
+        return;
+      }
+      rows.push([name, current.kind, field, index, row, column, key, baselineValue, value]);
+    };
+
+    if (current.kind === "scalar") {
+      pushRow("value", { baselineValue: baseline.value, value: current.value });
+    }
+
+    if (current.kind === "list") {
+      current.values.forEach((value, index) => {
+        pushRow("values", { index, baselineValue: baseline.values[index], value });
+      });
+    }
+
+    if (current.kind === "axis") {
+      current.x_axis.forEach((value, index) => {
+        pushRow("x_axis", { index, baselineValue: baseline.x_axis[index], value });
+      });
+    }
+
+    if (current.kind === "curve") {
+      current.x_axis.forEach((value, index) => {
+        pushRow("x_axis", { index, baselineValue: baseline.x_axis[index], value });
+      });
+      current.values.forEach((value, index) => {
+        pushRow("values", { index, baselineValue: baseline.values[index], value });
+      });
+    }
+
+    if (current.kind === "map") {
+      current.x_axis.forEach((value, index) => {
+        pushRow("x_axis", { index, baselineValue: baseline.x_axis[index], value });
+      });
+      current.y_axis.forEach((value, index) => {
+        pushRow("y_axis", { index, baselineValue: baseline.y_axis[index], value });
+      });
+      current.map_values.forEach((rowValues, rowIndex) => {
+        rowValues.forEach((value, columnIndex) => {
+          pushRow("map_values", {
+            row: rowIndex,
+            column: columnIndex,
+            baselineValue: baseline.map_values[rowIndex][columnIndex],
+            value,
+          });
+        });
+      });
+    }
+
+    (current.metadata || []).forEach((item, index) => {
+      pushRow("metadata", {
+        index,
+        key: item.key,
+        baselineValue: baseline.metadata?.[index]?.value || "",
+        value: item.value,
+      });
+    });
+  });
+
+  return rows;
+}
+
+function rowsToCsv(rows) {
+  return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
+function triggerCsvDownload(mode = "all") {
+  if (!parameterNames().length) {
+    showStatus("Load a DCM file before exporting CSV.", "error");
+    return;
+  }
+  const rows = makeCsvRows(mode);
+  if (rows.length === 1) {
+    showStatus("No rows matched the requested export scope.", "info");
+    return;
+  }
+  const blob = new Blob([rowsToCsv(rows)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const suffix = mode === "changed" ? "changed" : "all";
+  link.href = url;
+  link.download = `dcm-editor-${suffix}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  showStatus(`Exported ${rows.length - 1} CSV row(s).`, "success");
+}
+
+function triggerTextDownload(fileName, text, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function parseIntegerField(value, label) {
+  if (value === "") {
+    throw new Error(`${label} is required for this CSV row`);
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${label} must be an integer`);
+  }
+  return parsed;
+}
+
+function applyCsvRowToParameter(parameter, row) {
+  const field = row.field;
+  const value = row.value;
+
+  if (field === "value") {
+    if (parameter.kind !== "scalar") {
+      throw new Error(`${parameter.name}: field "value" is only valid for scalar parameters`);
+    }
+    parameter.value = value;
+    return;
+  }
+
+  if (field === "values") {
+    const index = parseIntegerField(row.index, "index");
+    if (!Array.isArray(parameter.values) || index < 0 || index >= parameter.values.length) {
+      throw new Error(`${parameter.name}: values index ${index} is out of range`);
+    }
+    parameter.values[index] = value;
+    return;
+  }
+
+  if (field === "x_axis") {
+    const index = parseIntegerField(row.index, "index");
+    if (!Array.isArray(parameter.x_axis) || index < 0 || index >= parameter.x_axis.length) {
+      throw new Error(`${parameter.name}: x_axis index ${index} is out of range`);
+    }
+    parameter.x_axis[index] = value;
+    return;
+  }
+
+  if (field === "y_axis") {
+    const index = parseIntegerField(row.index, "index");
+    if (!Array.isArray(parameter.y_axis) || index < 0 || index >= parameter.y_axis.length) {
+      throw new Error(`${parameter.name}: y_axis index ${index} is out of range`);
+    }
+    parameter.y_axis[index] = value;
+    return;
+  }
+
+  if (field === "map_values") {
+    const rowIndex = parseIntegerField(row.row, "row");
+    const columnIndex = parseIntegerField(row.column, "column");
+    if (
+      !Array.isArray(parameter.map_values)
+      || rowIndex < 0
+      || rowIndex >= parameter.map_values.length
+      || columnIndex < 0
+      || columnIndex >= parameter.map_values[rowIndex].length
+    ) {
+      throw new Error(`${parameter.name}: map_values[${rowIndex}][${columnIndex}] is out of range`);
+    }
+    parameter.map_values[rowIndex][columnIndex] = value;
+    return;
+  }
+
+  if (field === "metadata") {
+    const index = parseIntegerField(row.index, "index");
+    if (!Array.isArray(parameter.metadata) || index < 0 || index >= parameter.metadata.length) {
+      throw new Error(`${parameter.name}: metadata index ${index} is out of range`);
+    }
+    if (row.key && parameter.metadata[index].key !== row.key) {
+      throw new Error(`${parameter.name}: metadata key mismatch at index ${index}`);
+    }
+    parameter.metadata[index].value = value;
+    return;
+  }
+
+  throw new Error(`${parameter.name}: unsupported CSV field "${field}"`);
+}
+
+function importCsvText(text, fileName = "CSV") {
+  const rows = parseCsv(text);
+  if (rows.length < 2) {
+    showStatus(`${fileName} does not contain any data rows.`, "error");
+    return;
+  }
+
+  const [header, ...dataRows] = rows;
+  const headerIndex = Object.fromEntries(header.map((name, index) => [name, index]));
+  const requiredHeaders = ["parameter", "kind", "field", "value"];
+  for (const required of requiredHeaders) {
+    if (!(required in headerIndex)) {
+      showStatus(`${fileName} is missing required CSV column "${required}".`, "error");
+      return;
+    }
+  }
+
+  const parsedRows = dataRows.map((cells, rowOffset) => ({
+    rowNumber: rowOffset + 2,
+    parameter: cells[headerIndex.parameter] || "",
+    kind: cells[headerIndex.kind] || "",
+    field: cells[headerIndex.field] || "",
+    index: cells[headerIndex.index] || "",
+    row: cells[headerIndex.row] || "",
+    column: cells[headerIndex.column] || "",
+    key: cells[headerIndex.key] || "",
+    value: cells[headerIndex.value] || "",
+  }));
+
+  const errors = [];
+  const touchedParameters = new Set();
+
+  commitChange(() => {
+    parsedRows.forEach((row) => {
+      try {
+        if (!row.parameter) {
+          throw new Error("parameter is empty");
+        }
+        const parameter = state.current.get(row.parameter);
+        if (!parameter) {
+          throw new Error(`unknown parameter "${row.parameter}"`);
+        }
+        if (row.kind && row.kind !== parameter.kind) {
+          throw new Error(`kind mismatch: expected ${parameter.kind}, got ${row.kind}`);
+        }
+        applyCsvRowToParameter(parameter, row);
+        touchedParameters.add(parameter.name);
+      } catch (error) {
+        errors.push(`Row ${row.rowNumber}: ${error.message}`);
+      }
+    });
+  }, `Imported CSV changes for ${touchedParameters.size} parameter(s)`);
+
+  if (errors.length) {
+    showStatus(`Imported with ${errors.length} row error(s). First: ${errors[0]}`, "error");
+    return;
+  }
+
+  if (!touchedParameters.size) {
+    showStatus(`${fileName} did not update any parameters.`, "info");
+    return;
+  }
+
+  const issues = collectValidationIssues();
+  if (issues.length) {
+    showStatus(`Imported ${parsedRows.length} row(s). Validation issues need review before save.`, "info");
+    return;
+  }
+  showStatus(`Imported ${parsedRows.length} row(s) from ${fileName}.`, "success");
+}
+
+function makeDiffReport() {
+  const compareLabel = baselineLabel();
+  const lines = [
+    "# DCM Diff Report",
+    "",
+    `- Current file: ${state.filePath || "None"}`,
+    `- Baseline: ${compareLabel}`,
+    `- Changed parameters: ${changedParameterCount()}`,
+    `- Exported at: ${new Date().toISOString()}`,
+    "",
+  ];
+
+  const changedNames = parameterNames().filter((name) => diffParameter(state.current.get(name), activeCompareBaseline(name)).changed);
+  if (!changedNames.length) {
+    lines.push("No parameter differences.");
+    return lines.join("\n");
+  }
+
+  changedNames.forEach((name) => {
+    const current = state.current.get(name);
+    const baseline = activeCompareBaseline(name);
+    const diff = diffParameter(current, baseline);
+
+    lines.push(`## ${name}`);
+    lines.push("");
+    lines.push(`- Kind: ${current.kind}`);
+    lines.push(`- Changed items: ${diff.changedCells}`);
+    if (diff.notes.length) {
+      lines.push(`- Notes: ${diff.notes.join("; ")}`);
+    }
+    lines.push("");
+
+    if (current.kind === "scalar") {
+      lines.push("| Field | Baseline | Current |");
+      lines.push("| --- | --- | --- |");
+      lines.push(`| value | ${baseline.value} | ${current.value} |`);
+      lines.push("");
+    }
+
+    if (current.kind === "list") {
+      lines.push("| Index | Baseline | Current |");
+      lines.push("| --- | --- | --- |");
+      current.values.forEach((value, index) => {
+        if (value !== baseline.values[index]) {
+          lines.push(`| ${index} | ${baseline.values[index]} | ${value} |`);
+        }
+      });
+      lines.push("");
+    }
+
+    if (current.kind === "axis") {
+      lines.push("| Index | Baseline Axis | Current Axis |");
+      lines.push("| --- | --- | --- |");
+      current.x_axis.forEach((value, index) => {
+        if (value !== baseline.x_axis[index]) {
+          lines.push(`| ${index} | ${baseline.x_axis[index]} | ${value} |`);
+        }
+      });
+      lines.push("");
+    }
+
+    if (current.kind === "curve") {
+      lines.push("| Field | Index | Baseline | Current |");
+      lines.push("| --- | --- | --- | --- |");
+      current.x_axis.forEach((value, index) => {
+        if (value !== baseline.x_axis[index]) {
+          lines.push(`| x_axis | ${index} | ${baseline.x_axis[index]} | ${value} |`);
+        }
+      });
+      current.values.forEach((value, index) => {
+        if (value !== baseline.values[index]) {
+          lines.push(`| values | ${index} | ${baseline.values[index]} | ${value} |`);
+        }
+      });
+      lines.push("");
+    }
+
+    if (current.kind === "map") {
+      lines.push("| Field | Row | Column | Baseline | Current |");
+      lines.push("| --- | --- | --- | --- | --- |");
+      current.x_axis.forEach((value, index) => {
+        if (value !== baseline.x_axis[index]) {
+          lines.push(`| x_axis | - | ${index} | ${baseline.x_axis[index]} | ${value} |`);
+        }
+      });
+      current.y_axis.forEach((value, index) => {
+        if (value !== baseline.y_axis[index]) {
+          lines.push(`| y_axis | ${index} | - | ${baseline.y_axis[index]} | ${value} |`);
+        }
+      });
+      current.map_values.forEach((rowValues, rowIndex) => {
+        rowValues.forEach((value, columnIndex) => {
+          if (value !== baseline.map_values[rowIndex][columnIndex]) {
+            lines.push(`| map_values | ${rowIndex} | ${columnIndex} | ${baseline.map_values[rowIndex][columnIndex]} | ${value} |`);
+          }
+        });
+      });
+      lines.push("");
+    }
+
+    (current.metadata || []).forEach((item, index) => {
+      const baselineValue = baseline.metadata?.[index]?.value || "";
+      if (item.value !== baselineValue) {
+        if (!lines[lines.length - 1].startsWith("| Metadata")) {
+          lines.push("| Metadata | Baseline | Current |");
+          lines.push("| --- | --- | --- |");
+        }
+        lines.push(`| ${item.key} | ${baselineValue} | ${item.value} |`);
+      }
+    });
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+function exportDiffReport() {
+  if (!parameterNames().length) {
+    showStatus("Load a DCM file before exporting a diff report.", "error");
+    return;
+  }
+  const report = makeDiffReport();
+  triggerTextDownload("dcm-diff-report.md", report, "text/markdown;charset=utf-8");
+  showStatus("Exported diff report.", "success");
 }
 
 async function loadFiles() {
@@ -605,6 +1547,9 @@ async function loadDocument(path) {
     showStatus("Provide a DCM file path first.", "error");
     return;
   }
+  if (isDirty() && !window.confirm("Load a new DCM file and discard unsaved changes?")) {
+    return;
+  }
 
   try {
     clearStatus();
@@ -619,9 +1564,47 @@ async function loadDocument(path) {
   }
 }
 
+async function runCompare() {
+  const comparePath = els.comparePath.value.trim();
+  if (!state.filePath || !comparePath) {
+    showStatus("Load a DCM file and provide a compare file path first.", "error");
+    return;
+  }
+
+  try {
+    const payload = await api("/api/compare", {
+      method: "POST",
+      body: JSON.stringify({
+        current_path: state.filePath,
+        compare_path: comparePath,
+        parameters: collectParameters(),
+      }),
+    });
+    state.comparePath = payload.compare_path;
+    state.compareBaseline = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
+    state.compareIssues = payload.validation_issues || [];
+    els.comparePath.value = payload.compare_path;
+    renderAll();
+    showStatus(`Compared current editor state against ${payload.compare_path}`, "success");
+  } catch (error) {
+    showStatus(error.message, "error");
+  }
+}
+
 async function saveDocument() {
+  return saveDocumentToPath(null);
+}
+
+async function saveDocumentToPath(outputPath = null) {
   if (!state.filePath || !parameterNames().length) {
     showStatus("Load a DCM file before saving.", "error");
+    return;
+  }
+
+  const issues = collectValidationIssues();
+  if (issues.length) {
+    showStatus("Resolve validation issues before saving.", "error");
+    renderAll();
     return;
   }
 
@@ -630,34 +1613,112 @@ async function saveDocument() {
       method: "POST",
       body: JSON.stringify({
         path: state.filePath,
+        output_path: outputPath,
         source_hash: state.sourceHash,
         parameters: collectParameters(),
       }),
     });
+    state.filePath = payload.path;
+    els.filePath.value = payload.path;
     state.sourceHash = payload.source_hash;
     state.original = new Map(parameterNames().map((name) => [name, deepClone(state.current.get(name))]));
+    state.documentIssues = payload.validation_issues || [];
+    state.undoStack = [];
+    state.redoStack = [];
     renderAll();
-    showStatus(`Saved ${payload.path}. Backup: ${payload.backup_path}`, "success");
+    const backupMessage = payload.backup_path ? ` Backup: ${payload.backup_path}` : "";
+    showStatus(`Saved ${payload.path}.${backupMessage}`, "success");
   } catch (error) {
     showStatus(error.message, "error");
   }
+}
+
+async function saveAsDocument() {
+  if (!state.filePath || !parameterNames().length) {
+    showStatus("Load a DCM file before using Save As.", "error");
+    return;
+  }
+  const suggestedPath = state.filePath.endsWith(".dcm")
+    ? state.filePath.replace(/\.dcm$/i, "_copy.dcm")
+    : `${state.filePath}_copy.dcm`;
+  const outputPath = window.prompt("Save DCM as:", suggestedPath);
+  if (!outputPath) {
+    return;
+  }
+  await saveDocumentToPath(outputPath.trim());
 }
 
 function resetSelectedParameter() {
   if (!state.selectedName) {
     return;
   }
-  state.current.set(state.selectedName, deepClone(state.original.get(state.selectedName)));
-  renderAll();
-  showStatus(`Reset ${state.selectedName} to the loaded snapshot.`, "info");
+  commitChange(() => {
+    state.current.set(state.selectedName, deepClone(state.original.get(state.selectedName)));
+  }, `Reset ${state.selectedName} to the loaded snapshot`);
+}
+
+function undoChange() {
+  const snapshot = state.undoStack.pop();
+  if (!snapshot) {
+    return;
+  }
+  applyHistorySnapshot(snapshot, "undo");
+  showStatus("Undid the last edit.", "info");
+}
+
+function redoChange() {
+  const snapshot = state.redoStack.pop();
+  if (!snapshot) {
+    return;
+  }
+  applyHistorySnapshot(snapshot, "redo");
+  showStatus("Reapplied the last undone edit.", "info");
+}
+
+async function handleCsvFileSelection(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+  try {
+    const text = await file.text();
+    importCsvText(text, file.name);
+  } catch (error) {
+    showStatus(`Failed to read ${file.name}: ${error.message}`, "error");
+  } finally {
+    event.target.value = "";
+  }
 }
 
 els.refreshFiles.addEventListener("click", loadFiles);
 els.sampleFile.addEventListener("click", loadSamplePath);
 els.loadFile.addEventListener("click", () => loadDocument());
+els.saveAsFile.addEventListener("click", saveAsDocument);
 els.saveFile.addEventListener("click", saveDocument);
+els.compareFile.addEventListener("click", runCompare);
+els.clearCompare.addEventListener("click", () => {
+  clearCompare(true);
+  showStatus("Cleared the compare baseline.", "info");
+});
+els.undoChange.addEventListener("click", undoChange);
+els.redoChange.addEventListener("click", redoChange);
+els.importCsv.addEventListener("click", () => els.csvFileInput.click());
+els.exportCsv.addEventListener("click", () => triggerCsvDownload("all"));
+els.exportChangedCsv.addEventListener("click", () => triggerCsvDownload("changed"));
+els.exportDiffReport.addEventListener("click", exportDiffReport);
+els.csvFileInput.addEventListener("change", handleCsvFileSelection);
 els.resetParameter.addEventListener("click", resetSelectedParameter);
 els.parameterSearch.addEventListener("input", renderParameterList);
+els.comparePath.addEventListener("input", renderButtons);
+
+window.addEventListener("beforeunload", (event) => {
+  if (!isDirty()) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 loadFiles();
 loadSamplePath();
+renderAll();

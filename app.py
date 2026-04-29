@@ -8,7 +8,7 @@ from hashlib import sha256
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from dcm_parser import DcmDocument, ParseError, ValidationError
 
@@ -43,27 +43,52 @@ class AppState:
         document = DcmDocument.from_file(path)
         return document.to_payload()
 
-    def save_document(self, requested_path: str, source_hash: str, parameters: list[dict]) -> dict:
-        path = self.resolve_path(requested_path)
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        current_text = path.read_text(encoding="utf-8")
+    def save_document(
+        self,
+        requested_path: str,
+        source_hash: str,
+        parameters: list[dict],
+        output_path: str | None = None,
+    ) -> dict:
+        source_path = self.resolve_path(requested_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"File not found: {source_path}")
+        current_text = source_path.read_text(encoding="utf-8")
         current_hash = sha256(current_text.encode("utf-8")).hexdigest()
         if current_hash != source_hash:
             raise ValidationError("The file changed on disk after it was loaded. Reload it before saving.")
 
-        document = DcmDocument.from_text(current_text, path)
+        document = DcmDocument.from_text(current_text, source_path)
         document.apply_payloads(parameters)
         new_text = document.render_text()
 
-        backup_path = path.with_suffix(path.suffix + f".{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak")
-        shutil.copy2(path, backup_path)
-        path.write_text(new_text, encoding="utf-8")
+        target_path = self.resolve_path(output_path) if output_path else source_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        backup_path: Path | None = None
+        if target_path.exists():
+            backup_path = target_path.with_suffix(target_path.suffix + f".{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak")
+            shutil.copy2(target_path, backup_path)
+        target_path.write_text(new_text, encoding="utf-8")
 
         return {
-            "path": str(path),
-            "backup_path": str(backup_path),
+            "path": str(target_path),
+            "backup_path": str(backup_path) if backup_path else None,
             "source_hash": sha256(new_text.encode("utf-8")).hexdigest(),
+            "validation_issues": document.collect_validation_issues(),
+            "source_path": str(source_path),
+        }
+
+    def compare_document(self, current_path: str, parameters: list[dict], compare_path: str) -> dict:
+        current_document = DcmDocument.from_file(self.resolve_path(current_path))
+        current_document.apply_payloads(parameters)
+        baseline_document = DcmDocument.from_file(self.resolve_path(compare_path))
+        comparison = current_document.compare_to(baseline_document)
+        return {
+            "compare_path": str(self.resolve_path(compare_path)),
+            "parameters": [parameter.to_payload() for parameter in baseline_document.parameters],
+            "validation_issues": baseline_document.collect_validation_issues(),
+            **comparison,
         }
 
 
@@ -103,7 +128,15 @@ class DcmRequestHandler(BaseHTTPRequestHandler):
                 path = payload.get("path", "")
                 source_hash = payload.get("source_hash", "")
                 parameters = payload.get("parameters", [])
-                result = self.state.save_document(path, source_hash, parameters)
+                output_path = payload.get("output_path")
+                result = self.state.save_document(path, source_hash, parameters, output_path=output_path)
+                self._send_json(result)
+                return
+            if parsed.path == "/api/compare":
+                current_path = payload.get("current_path", "")
+                parameters = payload.get("parameters", [])
+                compare_path = payload.get("compare_path", "")
+                result = self.state.compare_document(current_path, parameters, compare_path)
                 self._send_json(result)
                 return
         except FileNotFoundError as error:

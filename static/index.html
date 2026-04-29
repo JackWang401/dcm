@@ -42,9 +42,37 @@
           <div class="toolbar-actions">
             <button id="sample-file" class="ghost-button" type="button">Use Sample</button>
             <button id="load-file" type="button">Load</button>
+            <button id="save-as-file" class="ghost-button" type="button">Save As</button>
             <button id="save-file" type="button">Save</button>
           </div>
         </header>
+
+        <section class="toolbar subtoolbar">
+          <div class="path-group">
+            <label for="compare-path">Compare against DCM</label>
+            <input id="compare-path" type="text" spellcheck="false" placeholder="Optional comparison file" />
+          </div>
+          <div class="toolbar-actions">
+            <button id="compare-file" class="ghost-button" type="button">Compare</button>
+            <button id="clear-compare" class="ghost-button" type="button">Clear Compare</button>
+            <button id="undo-change" class="ghost-button" type="button">Undo</button>
+            <button id="redo-change" class="ghost-button" type="button">Redo</button>
+          </div>
+        </section>
+
+        <section class="toolbar subtoolbar">
+          <div class="path-group">
+            <label for="csv-file-input">Bulk CSV Workflow</label>
+            <p class="muted compact-copy">Export editor values to CSV, edit externally, then import the file back as one undoable change.</p>
+          </div>
+          <div class="toolbar-actions">
+            <input id="csv-file-input" type="file" accept=".csv,text/csv" class="hidden-file-input" />
+            <button id="import-csv" class="ghost-button" type="button">Import CSV</button>
+            <button id="export-csv" class="ghost-button" type="button">Export All CSV</button>
+            <button id="export-changed-csv" class="ghost-button" type="button">Export Changed CSV</button>
+            <button id="export-diff-report" class="ghost-button" type="button">Export Diff Report</button>
+          </div>
+        </section>
 
         <section class="summary-grid">
           <article class="summary-card">
@@ -63,9 +91,31 @@
             <span class="summary-label">Selection</span>
             <strong id="summary-selection">None</strong>
           </article>
+          <article class="summary-card">
+            <span class="summary-label">Compare baseline</span>
+            <strong id="summary-compare">Loaded snapshot</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Save state</span>
+            <strong id="summary-dirty">Clean</strong>
+          </article>
         </section>
 
         <section id="status" class="status"></section>
+        <section id="issues-panel" class="panel hidden">
+          <div class="panel-header">
+            <h3>Validation</h3>
+            <span id="issues-count" class="muted">0</span>
+          </div>
+          <div id="issues-list" class="issues-list"></div>
+        </section>
+        <section id="compare-overview" class="panel hidden">
+          <div class="panel-header">
+            <h3>File Compare</h3>
+            <span id="compare-overview-path" class="muted"></span>
+          </div>
+          <div id="compare-overview-body"></div>
+        </section>
 
         <section id="empty-state" class="empty-state">
           <h2>Load a DCM file</h2>
@@ -101,7 +151,7 @@
 
           <article class="panel compare-panel">
             <div class="panel-header">
-              <h3>Previous vs Current</h3>
+              <h3>Baseline vs Current</h3>
               <span id="compare-summary" class="muted"></span>
             </div>
             <div id="compare-slot"></div>

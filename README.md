@@ -2,9 +2,16 @@
 
 Small local web tool for common DCM calibration editing workflows:
 
-- Edit parameter values for `FESTWERT`, `FESTWERTEBLOCK`, `KENNLINIE`, and `KENNFELD`
+- Edit parameter values for common DCM blocks including `FESTWERT`, `TEXTSTRING`, `FESTWERTEBLOCK`, `STUETZSTELLENVERTEILUNG`, `KENNLINIE`, `FESTKENNLINIE`, `KENNFELD`, and `FESTKENNFELD`
 - Visualize vector and map parameters with a line chart or heatmap
 - Compare the loaded snapshot against current edits before saving
+- Compare the current editor state against another DCM file
+- Validate numeric fields before save and block invalid writes
+- Undo and redo committed edits with unsaved-change tracking
+- Edit structured metadata fields such as `LANGNAME` and units while preserving non-editable lines
+- Export all or changed editor fields to CSV and import edited CSV rows back into the tool
+- Save the edited document back in place or write it to a new path with `Save As`
+- Export a Markdown diff report against the loaded snapshot or active compare baseline
 
 ## Run
 
@@ -19,6 +26,15 @@ Then open `http://127.0.0.1:8765`.
 - The tool creates a timestamped `.bak` file before each save.
 - It preserves untouched content outside supported parameter blocks.
 - Saving is guarded by a source hash so you do not overwrite a file that changed on disk after loading.
+- Numeric fields are validated against the original token type, so numeric calibration values cannot be replaced with non-numeric text.
+
+## CSV Round-Trip
+
+- Exported CSV uses flat rows with columns:
+  `parameter,kind,field,index,row,column,key,baseline_value,value`
+- Edit the `value` column externally and import the CSV back into the editor.
+- Supported fields include scalar `value`, vector/map axes and cells, and structured `metadata`.
+- CSV imports are applied as one undoable editor transaction.
 
 ## Sample
 
