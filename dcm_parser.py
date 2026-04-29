@@ -195,7 +195,6 @@ class ParameterBlock:
 
         if self.kind == "scalar":
             next_value = str(payload.get("value", ""))
-            self._validate_token_type(next_value, self.scalar_value, f"{self.name}.value")
             self.scalar_value = next_value
             return
 
@@ -239,17 +238,7 @@ class ParameterBlock:
     def _validate_vector(incoming: Any, original: list[str], field_name: str) -> list[str]:
         if not isinstance(incoming, list) or len(incoming) != len(original):
             raise ValidationError(f"{field_name} must preserve its original length")
-        normalized = [str(item) for item in incoming]
-        for index, (next_value, original_value) in enumerate(zip(normalized, original, strict=True)):
-            ParameterBlock._validate_token_type(next_value, original_value, f"{field_name}[{index}]")
-        return normalized
-
-    @staticmethod
-    def _validate_token_type(next_value: str, original_value: str | None, field_name: str) -> None:
-        if original_value is None:
-            return
-        if _is_numeric_token(original_value) and not _is_numeric_token(next_value):
-            raise ValidationError(f"{field_name} must stay numeric")
+        return [str(item) for item in incoming]
 
     def _apply_metadata(self, incoming_metadata: Any) -> None:
         metadata_items = [item for item in self.body_items if item.kind == "metadata"]
@@ -502,15 +491,6 @@ class DcmDocument:
             },
             "diffs": diffs,
         }
-
-
-def _is_numeric_token(value: str) -> bool:
-    try:
-        float(value)
-    except (TypeError, ValueError):
-        return False
-    return True
-
 
 def _count_parameter_changes(current: ParameterBlock, baseline: ParameterBlock) -> int:
     if current.kind == "scalar":

@@ -6,7 +6,7 @@ Small local web tool for common DCM calibration editing workflows:
 - Visualize vector and map parameters with a line chart or heatmap
 - Compare the loaded snapshot against current edits before saving
 - Compare the current editor state against another DCM file
-- Validate numeric fields before save and block invalid writes
+- Show numeric validation warnings while still allowing explicit saves
 - Undo and redo committed edits with unsaved-change tracking
 - Edit structured metadata fields such as `LANGNAME` and units while preserving non-editable lines
 - Export all or changed editor fields to CSV and import edited CSV rows back into the tool
@@ -34,7 +34,7 @@ These launchers start the local server and open the editor in your default brows
 - The tool creates a timestamped `.bak` file before each save.
 - It preserves untouched content outside supported parameter blocks.
 - Saving is guarded by a source hash so you do not overwrite a file that changed on disk after loading.
-- Numeric fields are validated against the original token type, so numeric calibration values cannot be replaced with non-numeric text.
+- Numeric fields are checked against the original token type and shown as validation warnings, but the editor still lets you save those changes when needed.
 
 ## CSV Round-Trip
 

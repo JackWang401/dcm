@@ -82,6 +82,28 @@ class AppStateTests(unittest.TestCase):
             self.assertEqual(backup_path.read_text(encoding="utf-8"), "old target")
             self.assertIn("WERT 810", output_path.read_text(encoding="utf-8"))
 
+    def test_save_document_allows_numeric_validation_warning(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            static = root / "static"
+            static.mkdir()
+            source_path = root / "source.dcm"
+            source_path.write_text(SAMPLE_TEXT, encoding="utf-8")
+
+            state = AppState(root_dir=root, static_dir=static)
+            document = DcmDocument.from_file(source_path)
+            payloads = [parameter.to_payload() for parameter in document.parameters]
+            payloads[0]["value"] = "fast"
+
+            result = state.save_document(
+                requested_path=str(source_path),
+                source_hash=document.to_payload()["source_hash"],
+                parameters=payloads,
+            )
+
+            self.assertEqual(result["path"], str(source_path))
+            self.assertIn("WERT fast", source_path.read_text(encoding="utf-8"))
+
     def test_save_document_text_requires_output_path(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

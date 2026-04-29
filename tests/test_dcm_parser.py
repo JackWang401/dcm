@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from dcm_parser import DcmDocument, ValidationError
+from dcm_parser import DcmDocument
 
 
 SAMPLE_TEXT = """KONSERVIERUNG_FORMAT 2.0
@@ -96,13 +96,14 @@ class DcmParserTests(unittest.TestCase):
         rendered = document.render_text()
         self.assertIn('LANGNAME "Updated idle speed"', rendered)
 
-    def test_numeric_fields_stay_numeric(self) -> None:
+    def test_numeric_fields_can_be_saved_as_text(self) -> None:
         document = DcmDocument.from_text(SAMPLE_TEXT)
         payloads = [parameter.to_payload() for parameter in document.parameters]
         payloads[0]["value"] = "fast"
 
-        with self.assertRaises(ValidationError):
-            document.apply_payloads(payloads)
+        document.apply_payloads(payloads)
+
+        self.assertIn("WERT fast", document.render_text())
 
     def test_compare_to_other_document(self) -> None:
         current = DcmDocument.from_text(SAMPLE_TEXT)

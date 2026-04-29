@@ -2244,11 +2244,6 @@ async function saveDocumentToPath(outputPath = null) {
   }
 
   const issues = collectValidationIssues();
-  if (issues.length) {
-    showStatus("Resolve validation issues before saving.", "error");
-    renderAll();
-    return;
-  }
 
   try {
     const payload = state.sourceMode === "upload"
@@ -2281,7 +2276,8 @@ async function saveDocumentToPath(outputPath = null) {
     state.redoStack = [];
     renderAll();
     const backupMessage = payload.backup_path ? ` Backup: ${payload.backup_path}` : "";
-    showStatus(`Saved ${payload.path}.${backupMessage}`, "success");
+    const validationMessage = issues.length ? ` Ignored ${issues.length} validation warning(s).` : "";
+    showStatus(`Saved ${payload.path}.${backupMessage}${validationMessage}`, "success");
   } catch (error) {
     showStatus(error.message, "error");
   }
