@@ -1,4 +1,8 @@
 const MAX_HISTORY = 100;
+const SIDEBAR_WIDTH_KEY = "dcm-editor-sidebar-width";
+const DEFAULT_SIDEBAR_WIDTH = 290;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 520;
 
 const state = {
   filePath: "",
@@ -19,6 +23,7 @@ const state = {
 
 const els = {
   filePath: document.querySelector("#file-path"),
+  sidebarResizer: document.querySelector("#sidebar-resizer"),
   dcmFileInput: document.querySelector("#dcm-file-input"),
   pickDcmFile: document.querySelector("#pick-dcm-file"),
   comparePath: document.querySelector("#compare-path"),
@@ -90,6 +95,92 @@ function clearStatus() {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function clampSidebarWidth(width) {
+  return Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width));
+}
+
+function applySidebarWidth(width, persist = true) {
+  const normalizedWidth = clampSidebarWidth(width);
+  document.documentElement.style.setProperty("--sidebar-width", `${normalizedWidth}px`);
+  if (persist) {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(normalizedWidth));
+  }
+}
+
+function initializeSidebarWidth() {
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (Number.isFinite(storedWidth)) {
+    applySidebarWidth(storedWidth, false);
+    return;
+  }
+  applySidebarWidth(DEFAULT_SIDEBAR_WIDTH, false);
+}
+
+function setupSidebarResizer() {
+  if (!els.sidebarResizer) {
+    return;
+  }
+
+  const startResize = (startX) => {
+    const startWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"))
+      || DEFAULT_SIDEBAR_WIDTH;
+
+    const handleMove = (clientX) => {
+      const nextWidth = startWidth + (clientX - startX);
+      applySidebarWidth(nextWidth, false);
+    };
+
+    const onPointerMove = (event) => {
+      handleMove(event.clientX);
+    };
+
+    const stopResize = () => {
+      document.body.classList.remove("is-resizing");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"));
+      applySidebarWidth(width, true);
+    };
+
+    document.body.classList.add("is-resizing");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  };
+
+  els.sidebarResizer.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      return;
+    }
+    event.preventDefault();
+    els.sidebarResizer.setPointerCapture?.(event.pointerId);
+    startResize(event.clientX);
+  });
+
+  els.sidebarResizer.addEventListener("keydown", (event) => {
+    const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-width"))
+      || DEFAULT_SIDEBAR_WIDTH;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      applySidebarWidth(currentWidth - 20, true);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      applySidebarWidth(currentWidth + 20, true);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applySidebarWidth(MIN_SIDEBAR_WIDTH, true);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applySidebarWidth(MAX_SIDEBAR_WIDTH, true);
+    }
+  });
+
+  els.sidebarResizer.addEventListener("dblclick", () => {
+    applySidebarWidth(DEFAULT_SIDEBAR_WIDTH, true);
+  });
 }
 
 function parameterNames(map = state.current) {
@@ -1799,4 +1890,6 @@ window.addEventListener("beforeunload", (event) => {
 
 loadFiles();
 loadSamplePath();
+initializeSidebarWidth();
+setupSidebarResizer();
 renderAll();

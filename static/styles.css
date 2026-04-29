@@ -11,6 +11,7 @@
   --danger: #b33c2d;
   --shadow: 0 24px 60px rgba(55, 31, 10, 0.12);
   --radius: 22px;
+  --sidebar-width: 290px;
 }
 
 * {
@@ -26,6 +27,7 @@ body {
     radial-gradient(circle at right center, rgba(89, 111, 72, 0.16), transparent 24%),
     linear-gradient(180deg, #f7f1e8 0%, var(--bg) 100%);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
 }
 
 button,
@@ -36,7 +38,7 @@ table {
 
 .shell {
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) 10px minmax(0, 1fr);
   min-height: 100vh;
   max-height: 100vh;
 }
@@ -61,12 +63,43 @@ table {
   overflow: hidden;
 }
 
+.sidebar-resizer {
+  position: relative;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: linear-gradient(
+    180deg,
+    rgba(110, 76, 45, 0.04) 0%,
+    rgba(110, 76, 45, 0.1) 100%
+  );
+}
+
+.sidebar-resizer::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  bottom: 20px;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(110, 76, 45, 0.28);
+}
+
+.sidebar-resizer:hover::before,
+.sidebar-resizer:focus-visible::before,
+body.is-resizing .sidebar-resizer::before {
+  background: var(--accent);
+}
+
 .brand h1,
 .detail-header h2 {
   margin: 2px 0 4px;
   font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   font-weight: 700;
   letter-spacing: -0.03em;
+  font-size: 2rem;
 }
 
 .eyebrow {
@@ -74,7 +107,7 @@ table {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   font-weight: 700;
 }
 
@@ -115,13 +148,13 @@ table {
 .path-group label {
   display: block;
   margin-bottom: 8px;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   color: var(--muted);
 }
 
 .compact-copy {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.7rem;
 }
 
 input[type="text"],
@@ -130,20 +163,22 @@ input[type="number"] {
   width: 100%;
   border: 1px solid rgba(110, 76, 45, 0.22);
   border-radius: 10px;
-  padding: 8px 10px;
+  padding: 7px 9px;
   background: rgba(255, 255, 255, 0.88);
   color: var(--text);
+  font-size: 12px;
 }
 
 button {
   border: none;
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 7px 10px;
   background: var(--accent);
   color: #fff8f2;
   font-weight: 700;
   cursor: pointer;
   transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  font-size: 12px;
 }
 
 button:hover {
@@ -214,14 +249,14 @@ button:disabled {
   padding: 4px 8px;
   background: rgba(255, 247, 238, 0.96);
   border: 1px solid rgba(110, 76, 45, 0.14);
-  font-size: 0.78rem;
+  font-size: 0.68rem;
 }
 
 .workspace-metrics {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  font-size: 0.84rem;
+  font-size: 0.72rem;
   color: var(--muted);
 }
 
@@ -237,7 +272,7 @@ button:disabled {
 }
 
 .summary-label {
-  font-size: 0.78rem;
+  font-size: 0.66rem;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -280,6 +315,7 @@ button:disabled {
   display: block;
   margin-bottom: 4px;
   color: var(--danger);
+  font-size: 0.78rem;
 }
 
 .panel-header,
@@ -288,6 +324,12 @@ button:disabled {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+
+.panel-header h2,
+.panel-header h3 {
+  margin: 0;
+  font-size: 0.98rem;
 }
 
 .file-list,
@@ -313,11 +355,29 @@ button:disabled {
 .parameter-item {
   width: 100%;
   text-align: left;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border-radius: 12px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.58);
   color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.file-item strong,
+.parameter-item strong {
+  display: block;
+  font-size: 12px;
+  line-height: 1.15;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-item .muted,
+.parameter-item .muted {
+  font-size: 11px;
 }
 
 .file-item:hover,
@@ -331,7 +391,7 @@ button:disabled {
   content: "changed";
   float: right;
   color: var(--accent);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -369,6 +429,7 @@ button:disabled {
   border-bottom: 1px solid rgba(110, 76, 45, 0.12);
   padding: 6px 8px;
   text-align: center;
+  font-size: 12px;
 }
 
 .editor-table th:first-child,
@@ -420,7 +481,7 @@ button:disabled {
   align-items: center;
   justify-content: center;
   font-family: Menlo, Consolas, monospace;
-  font-size: 0.86rem;
+  font-size: 0.72rem;
 }
 
 .compare-grid {
@@ -449,7 +510,7 @@ button:disabled {
 .compare-status {
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   color: var(--accent);
 }
 
@@ -471,7 +532,7 @@ button:disabled {
   background: rgba(255, 251, 246, 0.92);
   color: var(--muted);
   font-family: Menlo, Consolas, monospace;
-  font-size: 0.84rem;
+  font-size: 11px;
   white-space: pre-wrap;
 }
 
@@ -510,6 +571,10 @@ button:disabled {
   .sidebar {
     border-right: none;
     border-bottom: 1px solid var(--panel-border);
+  }
+
+  .sidebar-resizer {
+    display: none;
   }
 
   .detail-grid,
