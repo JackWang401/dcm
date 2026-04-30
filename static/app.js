@@ -893,7 +893,6 @@ function collectFieldDiffs(current, baseline) {
   };
 
   if (current.kind === "scalar") {
-    push("value_prefix", baseline.value_prefix || "", current.value_prefix || "");
     push("value", baseline.value || "", current.value || "");
   } else if (current.kind === "list") {
     const length = Math.max(current.values?.length || 0, baseline.values?.length || 0);
@@ -932,12 +931,14 @@ function collectFieldDiffs(current, baseline) {
     }
   }
 
-  const metadataLength = Math.max(current.metadata?.length || 0, baseline.metadata?.length || 0);
-  for (let index = 0; index < metadataLength; index += 1) {
-    const currentItem = current.metadata?.[index];
-    const baselineItem = baseline.metadata?.[index];
-    const key = currentItem?.key || baselineItem?.key || `metadata[${index}]`;
-    push("metadata", baselineItem?.value || "", currentItem?.value || "", { index, key });
+  if (current.kind !== "scalar") {
+    const metadataLength = Math.max(current.metadata?.length || 0, baseline.metadata?.length || 0);
+    for (let index = 0; index < metadataLength; index += 1) {
+      const currentItem = current.metadata?.[index];
+      const baselineItem = baseline.metadata?.[index];
+      const key = currentItem?.key || baselineItem?.key || `metadata[${index}]`;
+      push("metadata", baselineItem?.value || "", currentItem?.value || "", { index, key });
+    }
   }
 
   return rows;
@@ -963,12 +964,20 @@ function computeFileCompare(files) {
         const after = currentMap.get(name);
         if (!before && after) {
           summary.added += 1;
-          rows.push({ status: "added", parameter: name, kind: after.kind, field: "parameter", beforeValue: "", afterValue: "Present" });
+          if (after.kind === "scalar") {
+            rows.push({ status: "added", parameter: name, kind: after.kind, field: "value", beforeValue: "", afterValue: after.value || "" });
+          } else {
+            rows.push({ status: "added", parameter: name, kind: after.kind, field: "parameter", beforeValue: "", afterValue: "Present" });
+          }
           return;
         }
         if (before && !after) {
           summary.removed += 1;
-          rows.push({ status: "removed", parameter: name, kind: before.kind, field: "parameter", beforeValue: "Present", afterValue: "" });
+          if (before.kind === "scalar") {
+            rows.push({ status: "removed", parameter: name, kind: before.kind, field: "value", beforeValue: before.value || "", afterValue: "" });
+          } else {
+            rows.push({ status: "removed", parameter: name, kind: before.kind, field: "parameter", beforeValue: "Present", afterValue: "" });
+          }
           return;
         }
         if (before.kind !== after.kind) {
@@ -2660,18 +2669,20 @@ function flattenParameterFields(parameter) {
     });
   };
 
-  push("kind", parameter.kind);
   if (parameter.kind === "scalar") {
-    push("value_prefix", parameter.value_prefix || "");
     push("value", parameter.value || "");
   } else if (parameter.kind === "list") {
+    push("kind", parameter.kind);
     (parameter.values || []).forEach((value, index) => push("values", value, { index }));
   } else if (parameter.kind === "axis") {
+    push("kind", parameter.kind);
     (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
   } else if (parameter.kind === "curve") {
+    push("kind", parameter.kind);
     (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
     (parameter.values || []).forEach((value, index) => push("values", value, { index }));
   } else if (parameter.kind === "map") {
+    push("kind", parameter.kind);
     (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
     (parameter.y_axis || []).forEach((value, index) => push("y_axis", value, { index }));
     (parameter.map_values || []).forEach((rowValues, row) => {
@@ -2679,9 +2690,11 @@ function flattenParameterFields(parameter) {
     });
   }
 
-  (parameter.metadata || []).forEach((item, index) => {
-    push("metadata", item.value || "", { index, key: item.key });
-  });
+  if (parameter.kind !== "scalar") {
+    (parameter.metadata || []).forEach((item, index) => {
+      push("metadata", item.value || "", { index, key: item.key });
+    });
+  }
   return rows;
 }
 
@@ -2895,11 +2908,19 @@ function singleDiffRows() {
     const current = state.current.get(name);
     const baseline = baselineMap.get(name);
     if (!current && baseline) {
-      rows.push(["removed", name, baseline.kind, "parameter", "", "Present", ""]);
+      if (baseline.kind === "scalar") {
+        rows.push(["removed", name, baseline.kind, "value", "", baseline.value || "", ""]);
+      } else {
+        rows.push(["removed", name, baseline.kind, "parameter", "", "Present", ""]);
+      }
       return;
     }
     if (current && !baseline) {
-      rows.push(["added", name, current.kind, "parameter", "", "", "Present"]);
+      if (current.kind === "scalar") {
+        rows.push(["added", name, current.kind, "value", "", "", current.value || ""]);
+      } else {
+        rows.push(["added", name, current.kind, "parameter", "", "", "Present"]);
+      }
       return;
     }
     if (current.kind !== baseline.kind) {
