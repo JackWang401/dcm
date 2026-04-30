@@ -19,6 +19,9 @@ const state = {
   sourceText: "",
   sourceHash: "",
   files: [],
+  loadedFiles: [],
+  activeLoadedFileId: "",
+  selectedCompareFileIds: [],
   original: new Map(),
   current: new Map(),
   selectedName: null,
@@ -26,6 +29,7 @@ const state = {
   comparePath: "",
   compareBaseline: new Map(),
   compareIssues: [],
+  fileCompare: null,
   undoStack: [],
   redoStack: [],
   surfaceView: {
@@ -136,6 +140,10 @@ function splitPath(path) {
     directory: path.slice(0, separatorIndex + 1),
     filename: path.slice(separatorIndex + 1),
   };
+}
+
+function fileNameFromPath(path) {
+  return splitPath(path || "").filename || path || "Untitled DCM";
 }
 
 function hasPathDirectory(path) {
@@ -432,6 +440,87 @@ function collectParameters(map = state.current) {
   return parameterNames(map).map((name) => deepClone(map.get(name)));
 }
 
+function parameterMap(parameters) {
+  return new Map((parameters || []).map((parameter) => [parameter.name, deepClone(parameter)]));
+}
+
+function loadedFileId(payload) {
+  return `${payload.source_mode || "filesystem"}:${payload.path}`;
+}
+
+function selectedLoadedFiles() {
+  const selected = new Set(state.selectedCompareFileIds);
+  return state.loadedFiles.filter((file) => selected.has(file.id));
+}
+
+function syncActiveLoadedFile() {
+  if (!state.activeLoadedFileId) {
+    return;
+  }
+  const active = state.loadedFiles.find((file) => file.id === state.activeLoadedFileId);
+  if (!active) {
+    return;
+  }
+  active.currentParameters = collectParameters();
+  active.selectedName = state.selectedName;
+  active.sourceHash = state.sourceHash;
+  active.documentIssues = deepClone(state.documentIssues);
+}
+
+function addLoadedFile(payload, sourceText = "") {
+  const id = loadedFileId(payload);
+  const existing = state.loadedFiles.find((file) => file.id === id);
+  const nextRecord = {
+    id,
+    label: fileNameFromPath(payload.path),
+    path: payload.path,
+    sourceMode: payload.source_mode || "filesystem",
+    sourceText,
+    sourceHash: payload.source_hash,
+    originalParameters: payload.parameters.map((parameter) => deepClone(parameter)),
+    currentParameters: payload.parameters.map((parameter) => deepClone(parameter)),
+    selectedName: payload.parameters[0]?.name || null,
+    documentIssues: payload.validation_issues || [],
+  };
+
+  if (existing) {
+    Object.assign(existing, nextRecord);
+    return existing;
+  }
+
+  state.loadedFiles.push(nextRecord);
+  if (!state.selectedCompareFileIds.includes(id)) {
+    state.selectedCompareFileIds.push(id);
+  }
+  return nextRecord;
+}
+
+function activateLoadedFile(id) {
+  const record = state.loadedFiles.find((file) => file.id === id);
+  if (!record) {
+    return;
+  }
+
+  syncActiveLoadedFile();
+  state.activeLoadedFileId = record.id;
+  state.filePath = record.path;
+  state.outputFolderPath = hasPathDirectory(record.path) ? pathDirectory(record.path) : "";
+  state.sourceMode = record.sourceMode;
+  state.sourceText = record.sourceText || "";
+  state.sourceHash = record.sourceHash;
+  state.original = parameterMap(record.originalParameters);
+  state.current = parameterMap(record.currentParameters);
+  state.selectedName = record.selectedName && state.current.has(record.selectedName)
+    ? record.selectedName
+    : record.currentParameters[0]?.name || null;
+  state.documentIssues = deepClone(record.documentIssues || []);
+  state.undoStack = [];
+  state.redoStack = [];
+  els.filePath.value = record.path;
+  clearCompare();
+  renderAll();
+}
+
 function snapshotState() {
   return {
     parameters: collectParameters(),
@@ -485,6 +574,9 @@ function applyHistorySnapshot(snapshot, origin) {
 }
 
 function baselineLabel() {
+  if (state.fileCompare) {
+    return state.fileCompare.baseline.label;
+  }
   return state.comparePath || "Loaded snapshot";
 }
 
@@ -492,11 +584,23 @@ function displayFileLabel() {
   if (!state.filePath) {
     return "None";
   }
-  return state.sourceMode === "upload" ? `${state.filePath} (chosen in browser)` : state.filePath;
+  const label = fileNameFromPath(state.filePath);
+  return state.sourceMode === "upload" ? `${label} (chosen in browser)` : label;
 }
 
 function isDirty() {
-  return changedParameterCount() > 0;
+  if (changedParameterCount() > 0) {
+    return true;
+  }
+  return state.loadedFiles.some((file) => {
+    if (file.id === state.activeLoadedFileId) {
+      return false;
+    }
+    const current = parameterMap(file.currentParameters);
+    const original = parameterMap(file.originalParameters);
+    const names = new Set([...parameterNames(current), ...parameterNames(original)]);
+    return [...names].some((name) => diffParameter(current.get(name), original.get(name)).changed);
+  });
 }
 
 function isNumericLike(value) {
@@ -710,6 +814,25 @@ function collectValidationIssues() {
 }
 
 function computeCompareOverview() {
+  if (state.fileCompare) {
+    const summary = { changed: 0, added: 0, removed: 0, unchanged: 0 };
+    const rows = [];
+    state.fileCompare.targets.forEach((target) => {
+      summary.changed += target.summary.changed + target.summary.kindChanged;
+      summary.added += target.summary.added;
+      summary.removed += target.summary.removed;
+      summary.unchanged += target.summary.unchanged;
+      target.rows.forEach((row) => {
+        rows.push({
+          name: row.parameter,
+          status: row.status,
+          note: `${target.file.label}: ${row.field || row.status}`,
+        });
+      });
+    });
+    return { summary, rows };
+  }
+
   if (!state.comparePath || !state.compareBaseline.size) {
     return null;
   }
@@ -754,6 +877,124 @@ function computeCompareOverview() {
   return { summary, rows };
 }
 
+function collectFieldDiffs(current, baseline) {
+  const rows = [];
+  const push = (field, beforeValue, afterValue, detail = {}) => {
+    if (String(beforeValue ?? "") === String(afterValue ?? "")) {
+      return;
+    }
+    rows.push({
+      status: "changed",
+      field,
+      beforeValue: beforeValue ?? "",
+      afterValue: afterValue ?? "",
+      ...detail,
+    });
+  };
+
+  if (current.kind === "scalar") {
+    push("value_prefix", baseline.value_prefix || "", current.value_prefix || "");
+    push("value", baseline.value || "", current.value || "");
+  } else if (current.kind === "list") {
+    const length = Math.max(current.values?.length || 0, baseline.values?.length || 0);
+    for (let index = 0; index < length; index += 1) {
+      push("values", baseline.values?.[index] || "", current.values?.[index] || "", { index });
+    }
+  } else if (current.kind === "axis") {
+    const length = Math.max(current.x_axis?.length || 0, baseline.x_axis?.length || 0);
+    for (let index = 0; index < length; index += 1) {
+      push("x_axis", baseline.x_axis?.[index] || "", current.x_axis?.[index] || "", { index });
+    }
+  } else if (current.kind === "curve") {
+    const xLength = Math.max(current.x_axis?.length || 0, baseline.x_axis?.length || 0);
+    const valueLength = Math.max(current.values?.length || 0, baseline.values?.length || 0);
+    for (let index = 0; index < xLength; index += 1) {
+      push("x_axis", baseline.x_axis?.[index] || "", current.x_axis?.[index] || "", { index });
+    }
+    for (let index = 0; index < valueLength; index += 1) {
+      push("values", baseline.values?.[index] || "", current.values?.[index] || "", { index });
+    }
+  } else if (current.kind === "map") {
+    const xLength = Math.max(current.x_axis?.length || 0, baseline.x_axis?.length || 0);
+    const yLength = Math.max(current.y_axis?.length || 0, baseline.y_axis?.length || 0);
+    const rowLength = Math.max(current.map_values?.length || 0, baseline.map_values?.length || 0);
+    for (let index = 0; index < xLength; index += 1) {
+      push("x_axis", baseline.x_axis?.[index] || "", current.x_axis?.[index] || "", { index });
+    }
+    for (let index = 0; index < yLength; index += 1) {
+      push("y_axis", baseline.y_axis?.[index] || "", current.y_axis?.[index] || "", { index });
+    }
+    for (let row = 0; row < rowLength; row += 1) {
+      const columnLength = Math.max(current.map_values?.[row]?.length || 0, baseline.map_values?.[row]?.length || 0);
+      for (let column = 0; column < columnLength; column += 1) {
+        push("map_values", baseline.map_values?.[row]?.[column] || "", current.map_values?.[row]?.[column] || "", { row, column });
+      }
+    }
+  }
+
+  const metadataLength = Math.max(current.metadata?.length || 0, baseline.metadata?.length || 0);
+  for (let index = 0; index < metadataLength; index += 1) {
+    const currentItem = current.metadata?.[index];
+    const baselineItem = baseline.metadata?.[index];
+    const key = currentItem?.key || baselineItem?.key || `metadata[${index}]`;
+    push("metadata", baselineItem?.value || "", currentItem?.value || "", { index, key });
+  }
+
+  return rows;
+}
+
+function computeFileCompare(files) {
+  const [baseline, ...targets] = files;
+  const baselineMap = parameterMap(baseline.currentParameters);
+  return {
+    baseline: {
+      id: baseline.id,
+      label: baseline.label,
+      path: baseline.path,
+    },
+    targets: targets.map((file) => {
+      const currentMap = parameterMap(file.currentParameters);
+      const names = [...new Set([...baselineMap.keys(), ...currentMap.keys()])].sort();
+      const summary = { changed: 0, added: 0, removed: 0, kindChanged: 0, unchanged: 0 };
+      const rows = [];
+
+      names.forEach((name) => {
+        const before = baselineMap.get(name);
+        const after = currentMap.get(name);
+        if (!before && after) {
+          summary.added += 1;
+          rows.push({ status: "added", parameter: name, kind: after.kind, field: "parameter", beforeValue: "", afterValue: "Present" });
+          return;
+        }
+        if (before && !after) {
+          summary.removed += 1;
+          rows.push({ status: "removed", parameter: name, kind: before.kind, field: "parameter", beforeValue: "Present", afterValue: "" });
+          return;
+        }
+        if (before.kind !== after.kind) {
+          summary.kindChanged += 1;
+          rows.push({ status: "kind_changed", parameter: name, kind: after.kind, field: "kind", beforeValue: before.kind, afterValue: after.kind });
+          return;
+        }
+
+        const fieldRows = collectFieldDiffs(after, before);
+        if (!fieldRows.length) {
+          summary.unchanged += 1;
+          return;
+        }
+        summary.changed += 1;
+        fieldRows.forEach((row) => rows.push({ ...row, parameter: name, kind: after.kind }));
+      });
+
+      return {
+        file: { id: file.id, label: file.label, path: file.path },
+        summary,
+        rows,
+      };
+    }),
+  };
+}
+
 function activeCompareBaseline(name) {
   if (state.comparePath && state.compareBaseline.has(name)) {
     return state.compareBaseline.get(name);
@@ -762,19 +1003,8 @@ function activeCompareBaseline(name) {
 }
 
 function setDocument(payload) {
-  state.filePath = payload.path;
-  state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : "";
-  state.sourceMode = payload.source_mode || "filesystem";
-  state.sourceHash = payload.source_hash;
-  state.original = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
-  state.current = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
-  state.selectedName = payload.parameters[0]?.name || null;
-  state.documentIssues = payload.validation_issues || [];
-  state.undoStack = [];
-  state.redoStack = [];
-  clearCompare();
-  els.filePath.value = payload.path;
-  renderAll();
+  const record = addLoadedFile(payload, state.sourceText);
+  activateLoadedFile(record.id);
 }
 
 function setDocumentFromUpload(payload, sourceText) {
@@ -786,6 +1016,7 @@ function clearCompare(render = false) {
   state.comparePath = "";
   state.compareBaseline = new Map();
   state.compareIssues = [];
+  state.fileCompare = null;
   els.comparePath.value = "";
   if (render) {
     renderAll();
@@ -803,23 +1034,59 @@ function renderAll() {
 }
 
 function renderFiles() {
-  if (!state.files.length) {
-    els.fileList.innerHTML = '<p class="muted">No `.dcm` files found under this workspace.</p>';
+  if (!state.loadedFiles.length && !state.files.length) {
+    els.fileList.innerHTML = '<p class="muted">No DCM files loaded yet.</p>';
     return;
   }
 
   els.fileList.innerHTML = "";
-  state.files.forEach((path) => {
+
+  state.loadedFiles.forEach((file) => {
+    const row = document.createElement("div");
+    row.className = "file-row";
+    if (file.id === state.activeLoadedFileId) {
+      row.classList.add("active");
+    }
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.selectedCompareFileIds.includes(file.id);
+    checkbox.setAttribute("aria-label", `Select ${file.label} for compare`);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked && !state.selectedCompareFileIds.includes(file.id)) {
+        state.selectedCompareFileIds.push(file.id);
+      } else if (!checkbox.checked) {
+        state.selectedCompareFileIds = state.selectedCompareFileIds.filter((id) => id !== file.id);
+      }
+      renderButtons();
+    });
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = "file-item";
-    button.textContent = path;
+    button.innerHTML = `<strong>${escapeHtml(file.label)}</strong>`;
     button.addEventListener("click", () => {
-      els.filePath.value = path;
-      loadDocument(path);
+      activateLoadedFile(file.id);
     });
-    els.fileList.appendChild(button);
+
+    row.appendChild(checkbox);
+    row.appendChild(button);
+    els.fileList.appendChild(row);
   });
+
+  if (!state.loadedFiles.length && state.files.length) {
+    state.files.forEach((path) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "file-item";
+      button.innerHTML = `<strong>${escapeHtml(fileNameFromPath(path))}</strong>`;
+      button.addEventListener("click", () => {
+        els.filePath.value = path;
+        loadDocument(path);
+      });
+      els.fileList.appendChild(button);
+    });
+  }
 }
 
 function renderParameterList() {
@@ -989,15 +1256,16 @@ function renderCompareOverview() {
 
 function renderButtons() {
   const hasDocument = Boolean(state.filePath && (parameterNames().length || state.original.size));
+  const hasFileCompareSelection = selectedLoadedFiles().length >= 2;
   els.saveFile.disabled = !hasDocument;
   els.saveAsFile.disabled = !hasDocument;
-  els.compareFile.disabled = !state.filePath || !parameterNames().length || !els.comparePath.value.trim();
-  els.clearCompare.disabled = !state.comparePath;
+  els.compareFile.disabled = !hasFileCompareSelection && (!state.filePath || !parameterNames().length || !els.comparePath.value.trim());
+  els.clearCompare.disabled = !state.comparePath && !state.fileCompare;
   els.pickDcmFile.disabled = false;
   els.importCsv.disabled = !hasDocument;
   els.exportCsv.disabled = !hasDocument;
   els.exportChangedCsv.disabled = !hasDocument || changedParameterCount() === 0;
-  els.exportDiffReport.disabled = !hasDocument;
+  els.exportDiffReport.disabled = !hasDocument && !state.fileCompare;
   els.undoChange.disabled = state.undoStack.length === 0;
   els.redoChange.disabled = state.redoStack.length === 0;
   els.addParameter.disabled = !state.filePath;
@@ -1288,7 +1556,87 @@ function renderVisualization(parameter, original) {
   }
 }
 
+function renderFileCompareComparison(compare) {
+  const totalDiffRows = compare.targets.reduce((count, target) => count + target.rows.length, 0);
+  els.compareSummary.textContent = `${totalDiffRows} difference row(s) against ${compare.baseline.label}`;
+  els.compareSlot.innerHTML = "";
+  const wrapper = document.createElement("div");
+  wrapper.className = "file-compare-viz";
+  wrapper.innerHTML = `
+    <div class="compare-legend">
+      <span><i class="legend-dot changed"></i>Changed field: same parameter exists in both files, but one field value differs.</span>
+      <span><i class="legend-dot added"></i>Added: parameter exists only in the after file.</span>
+      <span><i class="legend-dot removed"></i>Removed: parameter exists only in the before file.</span>
+      <span><i class="legend-dot kind-changed"></i>Kind changed: parameter name exists in both files with a different DCM block type.</span>
+    </div>
+    ${compare.targets.map((target) => `
+      <section class="file-compare-section">
+        <div class="panel-header">
+          <h3>${escapeHtml(compare.baseline.label)} -> ${escapeHtml(target.file.label)}</h3>
+          <span class="muted">${target.rows.length} row(s)</span>
+        </div>
+        <div class="compare-grid">
+          <div class="compare-pill">Changed: ${target.summary.changed}</div>
+          <div class="compare-pill">Added: ${target.summary.added}</div>
+          <div class="compare-pill">Removed: ${target.summary.removed}</div>
+          <div class="compare-pill">Kind changed: ${target.summary.kindChanged}</div>
+          <div class="compare-pill">Unchanged: ${target.summary.unchanged}</div>
+        </div>
+        ${target.rows.length ? `
+          <table class="compare-table file-compare-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Parameter</th>
+                <th>Field</th>
+                <th>Index</th>
+                <th>Before</th>
+                <th>After</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${target.rows.map((row) => `
+                <tr class="diff-${escapeHtml(row.status)}">
+                  <td>${escapeHtml(row.status.replaceAll("_", " "))}</td>
+                  <td>${escapeHtml(row.parameter)}</td>
+                  <td>${escapeHtml(formatDiffField(row))}</td>
+                  <td>${escapeHtml(formatDiffIndex(row))}</td>
+                  <td>${escapeHtml(row.beforeValue)}</td>
+                  <td>${escapeHtml(row.afterValue)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        ` : '<p class="muted">No differences for this after file.</p>'}
+      </section>
+    `).join("")}
+  `;
+  els.compareSlot.appendChild(wrapper);
+}
+
+function formatDiffField(row) {
+  if (row.key) {
+    return `${row.field}:${row.key}`;
+  }
+  return row.field || row.status;
+}
+
+function formatDiffIndex(row) {
+  if (row.row !== undefined || row.column !== undefined) {
+    return `${row.row ?? ""},${row.column ?? ""}`;
+  }
+  if (row.index !== undefined) {
+    return String(row.index);
+  }
+  return "";
+}
+
 function renderComparison(parameter) {
+  if (state.fileCompare) {
+    renderFileCompareComparison(state.fileCompare);
+    return;
+  }
+
   const baseline = activeCompareBaseline(parameter.name);
   const usingExternalBaseline = state.comparePath && state.compareBaseline.has(parameter.name);
 
@@ -2297,6 +2645,10 @@ function importCsvText(text, fileName = "CSV") {
 }
 
 function makeDiffReport() {
+  if (state.fileCompare) {
+    return makeFileCompareReport(state.fileCompare);
+  }
+
   const compareLabel = baselineLabel();
   const lines = [
     "# DCM Diff Report",
@@ -2413,7 +2765,172 @@ function makeDiffReport() {
   return lines.join("\n");
 }
 
+function makeFileCompareReport(compare) {
+  const lines = [
+    "# DCM File Compare Report",
+    "",
+    `- Before file: ${compare.baseline.label}`,
+    `- Before path: ${compare.baseline.path}`,
+    `- Compared files: ${compare.targets.length}`,
+    `- Exported at: ${new Date().toISOString()}`,
+    "",
+    "## Legend",
+    "",
+    "- Changed: same parameter and field exist in both files, but values differ.",
+    "- Added: parameter exists only in the after file.",
+    "- Removed: parameter exists only in the before file.",
+    "- Kind changed: parameter name exists in both files with different DCM block types.",
+    "",
+  ];
+
+  compare.targets.forEach((target) => {
+    lines.push(`## ${compare.baseline.label} -> ${target.file.label}`);
+    lines.push("");
+    lines.push(`- After path: ${target.file.path}`);
+    lines.push(`- Changed parameters: ${target.summary.changed}`);
+    lines.push(`- Added parameters: ${target.summary.added}`);
+    lines.push(`- Removed parameters: ${target.summary.removed}`);
+    lines.push(`- Kind changes: ${target.summary.kindChanged}`);
+    lines.push(`- Unchanged parameters: ${target.summary.unchanged}`);
+    lines.push("");
+
+    if (!target.rows.length) {
+      lines.push("No differences.");
+      lines.push("");
+      return;
+    }
+
+    lines.push("| Status | Parameter | Field | Index | Before | After |");
+    lines.push("| --- | --- | --- | --- | --- | --- |");
+    target.rows.forEach((row) => {
+      lines.push(
+        `| ${row.status.replaceAll("_", " ")} | ${row.parameter} | ${formatDiffField(row)} | ${formatDiffIndex(row)} | ${row.beforeValue} | ${row.afterValue} |`
+      );
+    });
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+function flattenParameterFields(parameter) {
+  const rows = [];
+  const push = (field, value, detail = {}) => {
+    rows.push({
+      parameter: parameter.name,
+      kind: parameter.kind,
+      field,
+      value: value ?? "",
+      ...detail,
+    });
+  };
+
+  push("kind", parameter.kind);
+  if (parameter.kind === "scalar") {
+    push("value_prefix", parameter.value_prefix || "");
+    push("value", parameter.value || "");
+  } else if (parameter.kind === "list") {
+    (parameter.values || []).forEach((value, index) => push("values", value, { index }));
+  } else if (parameter.kind === "axis") {
+    (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
+  } else if (parameter.kind === "curve") {
+    (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
+    (parameter.values || []).forEach((value, index) => push("values", value, { index }));
+  } else if (parameter.kind === "map") {
+    (parameter.x_axis || []).forEach((value, index) => push("x_axis", value, { index }));
+    (parameter.y_axis || []).forEach((value, index) => push("y_axis", value, { index }));
+    (parameter.map_values || []).forEach((rowValues, row) => {
+      rowValues.forEach((value, column) => push("map_values", value, { row, column }));
+    });
+  }
+
+  (parameter.metadata || []).forEach((item, index) => {
+    push("metadata", item.value || "", { index, key: item.key });
+  });
+  return rows;
+}
+
+function fieldRowKey(row) {
+  return [
+    row.parameter,
+    row.field,
+    row.index ?? "",
+    row.row ?? "",
+    row.column ?? "",
+    row.key ?? "",
+  ].join("\u0001");
+}
+
+function markdownCell(value) {
+  return String(value ?? "").replaceAll("|", "\\|").replaceAll("\n", "<br>");
+}
+
+function makeCheckedFilesReport(files) {
+  const fileFieldMaps = files.map((file) => {
+    const rows = new Map();
+    (file.currentParameters || []).forEach((parameter) => {
+      flattenParameterFields(parameter).forEach((row) => {
+        rows.set(fieldRowKey(row), row);
+      });
+    });
+    return rows;
+  });
+  const allKeys = [...new Set(fileFieldMaps.flatMap((map) => [...map.keys()]))].sort();
+  const changedRows = allKeys
+    .map((key) => {
+      const template = fileFieldMaps.find((map) => map.has(key))?.get(key);
+      const values = fileFieldMaps.map((map) => map.get(key)?.value || "");
+      const uniqueValues = new Set(values.map((value) => String(value)));
+      if (uniqueValues.size <= 1) {
+        return null;
+      }
+      return { ...template, values };
+    })
+    .filter(Boolean);
+
+  const lines = [
+    "# DCM File Compare Report",
+    "",
+    `- Compared files: ${files.length}`,
+    `- Difference rows: ${changedRows.length}`,
+    `- Exported at: ${new Date().toISOString()}`,
+    "",
+    "## Files",
+    "",
+    ...files.map((file, index) => `- File ${index + 1}: ${file.label} (${file.path})`),
+    "",
+    "## Differences",
+    "",
+  ];
+
+  if (!changedRows.length) {
+    lines.push("No parameter field differences between the checked files.");
+    return lines.join("\n");
+  }
+
+  const valueHeaders = files.map((file) => markdownCell(file.label));
+  lines.push(`| Parameter | Kind | Field | Index | ${valueHeaders.join(" | ")} |`);
+  lines.push(`| --- | --- | --- | --- | ${files.map(() => "---").join(" | ")} |`);
+  changedRows.forEach((row) => {
+    const values = row.values.map(markdownCell);
+    lines.push(
+      `| ${markdownCell(row.parameter)} | ${markdownCell(row.kind)} | ${markdownCell(formatDiffField(row))} | ${markdownCell(formatDiffIndex(row))} | ${values.join(" | ")} |`
+    );
+  });
+
+  return lines.join("\n");
+}
+
 function exportDiffReport() {
+  syncActiveLoadedFile();
+  const checkedFiles = selectedLoadedFiles();
+  if (checkedFiles.length >= 2) {
+    const report = makeCheckedFilesReport(checkedFiles);
+    triggerTextDownload("dcm-file-compare-report.md", report, "text/markdown;charset=utf-8");
+    showStatus(`Exported file compare report for ${checkedFiles.length} checked DCM file(s).`, "success");
+    return;
+  }
+
   if (!parameterNames().length) {
     showStatus("Load a DCM file before exporting a diff report.", "error");
     return;
@@ -2444,11 +2961,9 @@ async function loadDocument(path) {
     showStatus("Provide a DCM file path first.", "error");
     return;
   }
-  if (isDirty() && !window.confirm("Load a new DCM file and discard unsaved changes?")) {
-    return;
-  }
 
   try {
+    syncActiveLoadedFile();
     clearStatus();
     const payload = await api("/api/load", {
       method: "POST",
@@ -2466,11 +2981,9 @@ async function loadDocumentFromText(file) {
   if (!file) {
     return;
   }
-  if (isDirty() && !window.confirm("Load a new DCM file and discard unsaved changes?")) {
-    return;
-  }
 
   try {
+    syncActiveLoadedFile();
     clearStatus();
     const text = await file.text();
     const displayPath = file.path || file.webkitRelativePath || file.name;
@@ -2485,15 +2998,26 @@ async function loadDocumentFromText(file) {
     showStatus(`Loaded ${payload.parameters.length} parameters from ${displayPath}`, "success");
   } catch (error) {
     showStatus(error.message, "error");
-  } finally {
-    els.dcmFileInput.value = "";
   }
 }
 
 async function runCompare() {
+  syncActiveLoadedFile();
+  const compareFiles = selectedLoadedFiles();
+  if (compareFiles.length >= 2) {
+    state.fileCompare = computeFileCompare(compareFiles);
+    state.comparePath = compareFiles.map((file) => file.label).join(" -> ");
+    state.compareBaseline = parameterMap(compareFiles[0].currentParameters);
+    state.compareIssues = [];
+    els.comparePath.value = "";
+    renderAll();
+    showStatus(`Compared ${compareFiles.length} loaded DCM file(s).`, "success");
+    return;
+  }
+
   const comparePath = els.comparePath.value.trim();
   if (!state.filePath || !comparePath) {
-    showStatus("Load a DCM file and provide a compare file path first.", "error");
+    showStatus("Select at least two loaded DCM files, or load one DCM and provide a compare file path.", "error");
     return;
   }
 
@@ -2519,6 +3043,7 @@ async function runCompare() {
     state.comparePath = payload.compare_path;
     state.compareBaseline = new Map(payload.parameters.map((parameter) => [parameter.name, deepClone(parameter)]));
     state.compareIssues = payload.validation_issues || [];
+    state.fileCompare = null;
     els.comparePath.value = payload.compare_path;
     renderAll();
     showStatus(`Compared current editor state against ${payload.compare_path}`, "success");
@@ -2573,6 +3098,22 @@ async function saveDocumentToPath(outputPath = null) {
     state.sourceHash = payload.source_hash;
     state.original = new Map(parameterNames().map((name) => [name, deepClone(state.current.get(name))]));
     state.documentIssues = payload.validation_issues || [];
+    const activeRecord = state.loadedFiles.find((file) => file.id === state.activeLoadedFileId);
+    if (activeRecord) {
+      const oldId = activeRecord.id;
+      activeRecord.id = loadedFileId(payload);
+      activeRecord.label = fileNameFromPath(payload.path);
+      activeRecord.path = payload.path;
+      activeRecord.sourceMode = state.sourceMode;
+      activeRecord.sourceText = "";
+      activeRecord.sourceHash = payload.source_hash;
+      activeRecord.originalParameters = collectParameters(state.original);
+      activeRecord.currentParameters = collectParameters();
+      activeRecord.selectedName = state.selectedName;
+      activeRecord.documentIssues = payload.validation_issues || [];
+      state.activeLoadedFileId = activeRecord.id;
+      state.selectedCompareFileIds = state.selectedCompareFileIds.map((id) => id === oldId ? activeRecord.id : id);
+    }
     state.undoStack = [];
     state.redoStack = [];
     renderAll();
@@ -2796,8 +3337,11 @@ async function handleCsvFileSelection(event) {
 }
 
 async function handleDcmFileSelection(event) {
-  const file = event.target.files?.[0];
-  await loadDocumentFromText(file);
+  const files = [...(event.target.files || [])];
+  for (const file of files) {
+    await loadDocumentFromText(file);
+  }
+  event.target.value = "";
 }
 
 els.refreshFiles.addEventListener("click", loadFiles);
