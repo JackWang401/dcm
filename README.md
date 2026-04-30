@@ -11,7 +11,7 @@ Small local web tool for common DCM calibration editing workflows:
 - Edit structured metadata fields such as `LANGNAME` and units while preserving non-editable lines
 - Export all or changed editor fields to CSV and import edited CSV rows back into the tool
 - Save the edited document back in place or write it to a new path with `Save As`
-- Export a Markdown diff report against the loaded snapshot or active compare baseline
+- Export an Excel diff report against the loaded snapshot or active compare baseline
 - Open a DCM directly from the HTML file picker, then edit parameters from the compact list/detail layout
 
 ## Run

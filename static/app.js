@@ -2471,6 +2471,10 @@ function triggerCsvDownload(mode = "all") {
 
 function triggerTextDownload(fileName, text, mimeType = "text/plain;charset=utf-8") {
   const blob = new Blob([text], { type: mimeType });
+  triggerBlobDownload(fileName, blob);
+}
+
+function triggerBlobDownload(fileName, blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -2644,175 +2648,6 @@ function importCsvText(text, fileName = "CSV") {
   showStatus(`Imported ${parsedRows.length} row(s) from ${fileName}.`, "success");
 }
 
-function makeDiffReport() {
-  if (state.fileCompare) {
-    return makeFileCompareReport(state.fileCompare);
-  }
-
-  const compareLabel = baselineLabel();
-  const lines = [
-    "# DCM Diff Report",
-    "",
-    `- Current file: ${state.filePath || "None"}`,
-    `- Baseline: ${compareLabel}`,
-    `- Changed parameters: ${changedParameterCount()}`,
-    `- Exported at: ${new Date().toISOString()}`,
-    "",
-  ];
-
-  const changedNames = parameterNames().filter((name) => diffParameter(state.current.get(name), activeCompareBaseline(name)).changed);
-  if (!changedNames.length) {
-    lines.push("No parameter differences.");
-    return lines.join("\n");
-  }
-
-  changedNames.forEach((name) => {
-    const current = state.current.get(name);
-    const baseline = activeCompareBaseline(name);
-    const diff = diffParameter(current, baseline);
-
-    lines.push(`## ${name}`);
-    lines.push("");
-    lines.push(`- Kind: ${current.kind}`);
-    lines.push(`- Changed items: ${diff.changedCells}`);
-    if (diff.notes.length) {
-      lines.push(`- Notes: ${diff.notes.join("; ")}`);
-    }
-    lines.push("");
-
-    if (current.kind === "scalar") {
-      lines.push("| Field | Baseline | Current |");
-      lines.push("| --- | --- | --- |");
-      lines.push(`| value_prefix | ${baseline.value_prefix || ""} | ${current.value_prefix || ""} |`);
-      lines.push(`| value | ${baseline.value} | ${current.value} |`);
-      lines.push("");
-    }
-
-    if (current.kind === "list") {
-      lines.push("| Index | Baseline | Current |");
-      lines.push("| --- | --- | --- |");
-      current.values.forEach((value, index) => {
-        if (value !== baseline.values[index]) {
-          lines.push(`| ${index} | ${baseline.values[index]} | ${value} |`);
-        }
-      });
-      lines.push("");
-    }
-
-    if (current.kind === "axis") {
-      lines.push("| Index | Baseline Axis | Current Axis |");
-      lines.push("| --- | --- | --- |");
-      current.x_axis.forEach((value, index) => {
-        if (value !== baseline.x_axis[index]) {
-          lines.push(`| ${index} | ${baseline.x_axis[index]} | ${value} |`);
-        }
-      });
-      lines.push("");
-    }
-
-    if (current.kind === "curve") {
-      lines.push("| Field | Index | Baseline | Current |");
-      lines.push("| --- | --- | --- | --- |");
-      current.x_axis.forEach((value, index) => {
-        if (value !== baseline.x_axis[index]) {
-          lines.push(`| x_axis | ${index} | ${baseline.x_axis[index]} | ${value} |`);
-        }
-      });
-      current.values.forEach((value, index) => {
-        if (value !== baseline.values[index]) {
-          lines.push(`| values | ${index} | ${baseline.values[index]} | ${value} |`);
-        }
-      });
-      lines.push("");
-    }
-
-    if (current.kind === "map") {
-      lines.push("| Field | Row | Column | Baseline | Current |");
-      lines.push("| --- | --- | --- | --- | --- |");
-      current.x_axis.forEach((value, index) => {
-        if (value !== baseline.x_axis[index]) {
-          lines.push(`| x_axis | - | ${index} | ${baseline.x_axis[index]} | ${value} |`);
-        }
-      });
-      current.y_axis.forEach((value, index) => {
-        if (value !== baseline.y_axis[index]) {
-          lines.push(`| y_axis | ${index} | - | ${baseline.y_axis[index]} | ${value} |`);
-        }
-      });
-      current.map_values.forEach((rowValues, rowIndex) => {
-        rowValues.forEach((value, columnIndex) => {
-          if (value !== baseline.map_values[rowIndex][columnIndex]) {
-            lines.push(`| map_values | ${rowIndex} | ${columnIndex} | ${baseline.map_values[rowIndex][columnIndex]} | ${value} |`);
-          }
-        });
-      });
-      lines.push("");
-    }
-
-    (current.metadata || []).forEach((item, index) => {
-      const baselineValue = baseline.metadata?.[index]?.value || "";
-      if (item.value !== baselineValue) {
-        if (!lines[lines.length - 1].startsWith("| Metadata")) {
-          lines.push("| Metadata | Baseline | Current |");
-          lines.push("| --- | --- | --- |");
-        }
-        lines.push(`| ${item.key} | ${baselineValue} | ${item.value} |`);
-      }
-    });
-    lines.push("");
-  });
-
-  return lines.join("\n");
-}
-
-function makeFileCompareReport(compare) {
-  const lines = [
-    "# DCM File Compare Report",
-    "",
-    `- Before file: ${compare.baseline.label}`,
-    `- Before path: ${compare.baseline.path}`,
-    `- Compared files: ${compare.targets.length}`,
-    `- Exported at: ${new Date().toISOString()}`,
-    "",
-    "## Legend",
-    "",
-    "- Changed: same parameter and field exist in both files, but values differ.",
-    "- Added: parameter exists only in the after file.",
-    "- Removed: parameter exists only in the before file.",
-    "- Kind changed: parameter name exists in both files with different DCM block types.",
-    "",
-  ];
-
-  compare.targets.forEach((target) => {
-    lines.push(`## ${compare.baseline.label} -> ${target.file.label}`);
-    lines.push("");
-    lines.push(`- After path: ${target.file.path}`);
-    lines.push(`- Changed parameters: ${target.summary.changed}`);
-    lines.push(`- Added parameters: ${target.summary.added}`);
-    lines.push(`- Removed parameters: ${target.summary.removed}`);
-    lines.push(`- Kind changes: ${target.summary.kindChanged}`);
-    lines.push(`- Unchanged parameters: ${target.summary.unchanged}`);
-    lines.push("");
-
-    if (!target.rows.length) {
-      lines.push("No differences.");
-      lines.push("");
-      return;
-    }
-
-    lines.push("| Status | Parameter | Field | Index | Before | After |");
-    lines.push("| --- | --- | --- | --- | --- | --- |");
-    target.rows.forEach((row) => {
-      lines.push(
-        `| ${row.status.replaceAll("_", " ")} | ${row.parameter} | ${formatDiffField(row)} | ${formatDiffIndex(row)} | ${row.beforeValue} | ${row.afterValue} |`
-      );
-    });
-    lines.push("");
-  });
-
-  return lines.join("\n");
-}
-
 function flattenParameterFields(parameter) {
   const rows = [];
   const push = (field, value, detail = {}) => {
@@ -2861,11 +2696,286 @@ function fieldRowKey(row) {
   ].join("\u0001");
 }
 
-function markdownCell(value) {
-  return String(value ?? "").replaceAll("|", "\\|").replaceAll("\n", "<br>");
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
-function makeCheckedFilesReport(files) {
+function columnName(index) {
+  let name = "";
+  let number = index + 1;
+  while (number > 0) {
+    const remainder = (number - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    number = Math.floor((number - 1) / 26);
+  }
+  return name;
+}
+
+function sanitizeSheetName(name, usedNames) {
+  const fallback = "Sheet";
+  const base = String(name || fallback).replaceAll(/[\[\]:*?/\\]/g, " ").trim().slice(0, 31) || fallback;
+  let sheetName = base;
+  let suffix = 2;
+  while (usedNames.has(sheetName)) {
+    const suffixText = ` ${suffix}`;
+    sheetName = `${base.slice(0, 31 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+  usedNames.add(sheetName);
+  return sheetName;
+}
+
+function worksheetXml(rows) {
+  const sheetRows = rows.map((row, rowIndex) => {
+    const rowNumber = rowIndex + 1;
+    const cells = row.map((value, columnIndex) => {
+      const reference = `${columnName(columnIndex)}${rowNumber}`;
+      const style = rowIndex === 0 ? ' s="1"' : "";
+      return `<c r="${reference}" t="inlineStr"${style}><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    }).join("");
+    return `<row r="${rowNumber}">${cells}</row>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>${sheetRows}</sheetData>
+</worksheet>`;
+}
+
+function crc32(bytes) {
+  if (!crc32.table) {
+    crc32.table = new Uint32Array(256);
+    for (let index = 0; index < 256; index += 1) {
+      let value = index;
+      for (let bit = 0; bit < 8; bit += 1) {
+        value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      }
+      crc32.table[index] = value >>> 0;
+    }
+  }
+  let crc = 0xffffffff;
+  bytes.forEach((byte) => {
+    crc = crc32.table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function setUint16(view, offset, value) {
+  view.setUint16(offset, value, true);
+}
+
+function setUint32(view, offset, value) {
+  view.setUint32(offset, value, true);
+}
+
+function zipDateTime(date = new Date()) {
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { time, day };
+}
+
+function makeZip(entries) {
+  const encoder = new TextEncoder();
+  const { time, day } = zipDateTime();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  entries.forEach((entry) => {
+    const nameBytes = encoder.encode(entry.name);
+    const dataBytes = entry.bytes;
+    const checksum = crc32(dataBytes);
+
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(localHeader.buffer);
+    setUint32(localView, 0, 0x04034b50);
+    setUint16(localView, 4, 20);
+    setUint16(localView, 6, 0x0800);
+    setUint16(localView, 8, 0);
+    setUint16(localView, 10, time);
+    setUint16(localView, 12, day);
+    setUint32(localView, 14, checksum);
+    setUint32(localView, 18, dataBytes.length);
+    setUint32(localView, 22, dataBytes.length);
+    setUint16(localView, 26, nameBytes.length);
+    localHeader.set(nameBytes, 30);
+    localParts.push(localHeader, dataBytes);
+
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    const centralView = new DataView(centralHeader.buffer);
+    setUint32(centralView, 0, 0x02014b50);
+    setUint16(centralView, 4, 20);
+    setUint16(centralView, 6, 20);
+    setUint16(centralView, 8, 0x0800);
+    setUint16(centralView, 10, 0);
+    setUint16(centralView, 12, time);
+    setUint16(centralView, 14, day);
+    setUint32(centralView, 16, checksum);
+    setUint32(centralView, 20, dataBytes.length);
+    setUint32(centralView, 24, dataBytes.length);
+    setUint16(centralView, 28, nameBytes.length);
+    setUint32(centralView, 42, offset);
+    centralHeader.set(nameBytes, 46);
+    centralParts.push(centralHeader);
+
+    offset += localHeader.length + dataBytes.length;
+  });
+
+  const centralOffset = offset;
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const endHeader = new Uint8Array(22);
+  const endView = new DataView(endHeader.buffer);
+  setUint32(endView, 0, 0x06054b50);
+  setUint16(endView, 8, entries.length);
+  setUint16(endView, 10, entries.length);
+  setUint32(endView, 12, centralSize);
+  setUint32(endView, 16, centralOffset);
+
+  return new Blob([...localParts, ...centralParts, endHeader], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+function makeWorkbookBlob(sheets) {
+  const encoder = new TextEncoder();
+  const usedNames = new Set();
+  const normalizedSheets = sheets.map((sheet) => ({
+    name: sanitizeSheetName(sheet.name, usedNames),
+    rows: sheet.rows.length ? sheet.rows : [["No data"]],
+  }));
+  const contentTypes = [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+    '<Default Extension="xml" ContentType="application/xml"/>',
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+    ...normalizedSheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`),
+    '</Types>',
+  ].join("");
+  const workbookSheets = normalizedSheets
+    .map((sheet, index) => `<sheet name="${xmlEscape(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`)
+    .join("");
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets></workbook>`;
+  const workbookRels = [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    ...normalizedSheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`),
+    `<Relationship Id="rId${normalizedSheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`,
+    '</Relationships>',
+  ].join("");
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`;
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+
+  const entries = [
+    { name: "[Content_Types].xml", data: contentTypes },
+    { name: "_rels/.rels", data: rootRels },
+    { name: "xl/workbook.xml", data: workbook },
+    { name: "xl/_rels/workbook.xml.rels", data: workbookRels },
+    { name: "xl/styles.xml", data: styles },
+    ...normalizedSheets.map((sheet, index) => ({ name: `xl/worksheets/sheet${index + 1}.xml`, data: worksheetXml(sheet.rows) })),
+  ].map((entry) => ({ name: entry.name, bytes: encoder.encode(entry.data) }));
+
+  return makeZip(entries);
+}
+
+function singleDiffRows() {
+  const baselineMap = state.comparePath ? state.compareBaseline : state.original;
+  const names = [...new Set([...parameterNames(state.current), ...parameterNames(baselineMap)])].sort();
+  const rows = [];
+
+  names.forEach((name) => {
+    const current = state.current.get(name);
+    const baseline = baselineMap.get(name);
+    if (!current && baseline) {
+      rows.push(["removed", name, baseline.kind, "parameter", "", "Present", ""]);
+      return;
+    }
+    if (current && !baseline) {
+      rows.push(["added", name, current.kind, "parameter", "", "", "Present"]);
+      return;
+    }
+    if (current.kind !== baseline.kind) {
+      rows.push(["kind changed", name, current.kind, "kind", "", baseline.kind, current.kind]);
+      return;
+    }
+
+    const fieldRows = collectFieldDiffs(current, baseline);
+    fieldRows.forEach((row) => {
+      rows.push([
+        row.status.replaceAll("_", " "),
+        name,
+        current.kind,
+        formatDiffField(row),
+        formatDiffIndex(row),
+        row.beforeValue,
+        row.afterValue,
+      ]);
+    });
+  });
+
+  return rows;
+}
+
+function makeDiffWorkbook() {
+  const rows = singleDiffRows();
+  const summaryRows = [
+    ["Field", "Value"],
+    ["Current file", state.filePath || "None"],
+    ["Baseline", baselineLabel()],
+    ["Difference rows", rows.length],
+    ["Exported at", new Date().toISOString()],
+  ];
+  const differenceRows = [
+    ["Status", "Parameter", "Kind", "Field", "Index", "Baseline", "Current"],
+    ...(rows.length ? rows : [["unchanged", "", "", "", "", "", "No parameter differences"]]),
+  ];
+  return makeWorkbookBlob([
+    { name: "Summary", rows: summaryRows },
+    { name: "Differences", rows: differenceRows },
+  ]);
+}
+
+function makeFileCompareWorkbook(compare) {
+  const summaryRows = [
+    ["Field", "Value"],
+    ["Before file", compare.baseline.label],
+    ["Before path", compare.baseline.path],
+    ["Compared files", compare.targets.length],
+    ["Exported at", new Date().toISOString()],
+  ];
+  const differenceRows = [["After file", "Status", "Parameter", "Kind", "Field", "Index", "Before", "After"]];
+  compare.targets.forEach((target) => {
+    target.rows.forEach((row) => {
+      differenceRows.push([
+        target.file.label,
+        row.status.replaceAll("_", " "),
+        row.parameter,
+        row.kind,
+        formatDiffField(row),
+        formatDiffIndex(row),
+        row.beforeValue,
+        row.afterValue,
+      ]);
+    });
+  });
+  if (differenceRows.length === 1) {
+    differenceRows.push(["", "unchanged", "", "", "", "", "", "No differences"]);
+  }
+  return makeWorkbookBlob([
+    { name: "Summary", rows: summaryRows },
+    { name: "Differences", rows: differenceRows },
+  ]);
+}
+
+function makeCheckedFilesWorkbook(files) {
   const fileFieldMaps = files.map((file) => {
     const rows = new Map();
     (file.currentParameters || []).forEach((parameter) => {
@@ -2888,56 +2998,51 @@ function makeCheckedFilesReport(files) {
     })
     .filter(Boolean);
 
-  const lines = [
-    "# DCM File Compare Report",
-    "",
-    `- Compared files: ${files.length}`,
-    `- Difference rows: ${changedRows.length}`,
-    `- Exported at: ${new Date().toISOString()}`,
-    "",
-    "## Files",
-    "",
-    ...files.map((file, index) => `- File ${index + 1}: ${file.label} (${file.path})`),
-    "",
-    "## Differences",
-    "",
+  const summaryRows = [
+    ["Field", "Value"],
+    ["Compared files", files.length],
+    ["Difference rows", changedRows.length],
+    ["Exported at", new Date().toISOString()],
   ];
-
-  if (!changedRows.length) {
-    lines.push("No parameter field differences between the checked files.");
-    return lines.join("\n");
+  const fileRows = [["File", "Label", "Path"], ...files.map((file, index) => [`File ${index + 1}`, file.label, file.path])];
+  const differenceRows = [
+    ["Parameter", "Kind", "Field", "Index", ...files.map((file) => file.label)],
+    ...changedRows.map((row) => [
+      row.parameter,
+      row.kind,
+      formatDiffField(row),
+      formatDiffIndex(row),
+      ...row.values,
+    ]),
+  ];
+  if (differenceRows.length === 1) {
+    differenceRows.push(["", "", "", "", ...files.map(() => "No parameter field differences")]);
   }
 
-  const valueHeaders = files.map((file) => markdownCell(file.label));
-  lines.push(`| Parameter | Kind | Field | Index | ${valueHeaders.join(" | ")} |`);
-  lines.push(`| --- | --- | --- | --- | ${files.map(() => "---").join(" | ")} |`);
-  changedRows.forEach((row) => {
-    const values = row.values.map(markdownCell);
-    lines.push(
-      `| ${markdownCell(row.parameter)} | ${markdownCell(row.kind)} | ${markdownCell(formatDiffField(row))} | ${markdownCell(formatDiffIndex(row))} | ${values.join(" | ")} |`
-    );
-  });
-
-  return lines.join("\n");
+  return makeWorkbookBlob([
+    { name: "Summary", rows: summaryRows },
+    { name: "Files", rows: fileRows },
+    { name: "Differences", rows: differenceRows },
+  ]);
 }
 
 function exportDiffReport() {
   syncActiveLoadedFile();
   const checkedFiles = selectedLoadedFiles();
   if (checkedFiles.length >= 2) {
-    const report = makeCheckedFilesReport(checkedFiles);
-    triggerTextDownload("dcm-file-compare-report.md", report, "text/markdown;charset=utf-8");
-    showStatus(`Exported file compare report for ${checkedFiles.length} checked DCM file(s).`, "success");
+    const workbook = makeCheckedFilesWorkbook(checkedFiles);
+    triggerBlobDownload("dcm-file-compare-report.xlsx", workbook);
+    showStatus(`Exported Excel file compare report for ${checkedFiles.length} checked DCM file(s).`, "success");
     return;
   }
 
-  if (!parameterNames().length) {
+  if (!parameterNames().length && !state.original.size) {
     showStatus("Load a DCM file before exporting a diff report.", "error");
     return;
   }
-  const report = makeDiffReport();
-  triggerTextDownload("dcm-diff-report.md", report, "text/markdown;charset=utf-8");
-  showStatus("Exported diff report.", "success");
+  const workbook = state.fileCompare ? makeFileCompareWorkbook(state.fileCompare) : makeDiffWorkbook();
+  triggerBlobDownload("dcm-diff-report.xlsx", workbook);
+  showStatus("Exported Excel diff report.", "success");
 }
 
 async function loadFiles() {
