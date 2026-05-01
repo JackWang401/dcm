@@ -11,6 +11,7 @@ const DETAIL_PANE_HEIGHT_KEY = "dcm-editor-detail-pane-height";
 const DEFAULT_DETAIL_PANE_HEIGHT = 560;
 const MIN_DETAIL_PANE_HEIGHT = 320;
 const MAX_DETAIL_PANE_HEIGHT = 1100;
+const OUTPUT_FOLDER_PATH_KEY = "dcm-editor-output-folder-path";
 
 const state = {
   filePath: "",
@@ -154,17 +155,21 @@ function pathDirectory(path) {
   return splitPath(path).directory.replace(/[\\/]$/, "");
 }
 
+function joinPath(directory, filename) {
+  const separator = directory.includes("\\") ? "\\" : "/";
+  return `${directory}${separator}${filename}`;
+}
+
 function suggestSaveAsPath(inputPath) {
   const { directory, filename } = splitPath(inputPath.trim());
   const targetName = filename.endsWith(".dcm")
     ? filename.replace(/\.dcm$/i, "_copy.dcm")
     : `${filename}_copy.dcm`;
+  if (state.outputFolderPath) {
+    return joinPath(state.outputFolderPath, targetName);
+  }
   if (directory) {
     return `${directory}${targetName}`;
-  }
-  if (state.outputFolderPath) {
-    const separator = state.outputFolderPath.includes("\\") ? "\\" : "/";
-    return `${state.outputFolderPath}${separator}${targetName}`;
   }
   return targetName;
 }
@@ -173,8 +178,20 @@ function normalizeOutputPath(outputPath) {
   if (!outputPath || hasPathDirectory(outputPath) || !state.outputFolderPath) {
     return outputPath;
   }
-  const separator = state.outputFolderPath.includes("\\") ? "\\" : "/";
-  return `${state.outputFolderPath}${separator}${outputPath}`;
+  return joinPath(state.outputFolderPath, outputPath);
+}
+
+function rememberOutputFolderPath(path) {
+  state.outputFolderPath = path || "";
+  if (state.outputFolderPath) {
+    window.localStorage.setItem(OUTPUT_FOLDER_PATH_KEY, state.outputFolderPath);
+  } else {
+    window.localStorage.removeItem(OUTPUT_FOLDER_PATH_KEY);
+  }
+}
+
+function initializeOutputFolderPath() {
+  state.outputFolderPath = window.localStorage.getItem(OUTPUT_FOLDER_PATH_KEY) || "";
 }
 
 function clampSidebarWidth(width) {
@@ -504,7 +521,6 @@ function activateLoadedFile(id) {
   syncActiveLoadedFile();
   state.activeLoadedFileId = record.id;
   state.filePath = record.path;
-  state.outputFolderPath = hasPathDirectory(record.path) ? pathDirectory(record.path) : "";
   state.sourceMode = record.sourceMode;
   state.sourceText = record.sourceText || "";
   state.sourceHash = record.sourceHash;
@@ -3217,7 +3233,9 @@ async function saveDocumentToPath(outputPath = null) {
           }),
         });
     state.filePath = payload.path;
-    state.outputFolderPath = hasPathDirectory(payload.path) ? pathDirectory(payload.path) : state.outputFolderPath;
+    if (targetOutputPath && hasPathDirectory(payload.path)) {
+      rememberOutputFolderPath(pathDirectory(payload.path));
+    }
     els.filePath.value = payload.path;
     state.sourceMode = payload.source_mode || "filesystem";
     state.sourceText = "";
@@ -3261,7 +3279,7 @@ async function selectOutputFolder() {
     if (!payload.path) {
       return false;
     }
-    state.outputFolderPath = payload.path;
+    rememberOutputFolderPath(payload.path);
     showStatus(`Output folder set to ${payload.path}`, "success");
     renderButtons();
     return true;
@@ -3541,6 +3559,7 @@ window.addEventListener("beforeunload", (event) => {
 
 loadFiles();
 loadSamplePath();
+initializeOutputFolderPath();
 initializeSidebarWidth();
 initializeDetailVisualWidth();
 initializeDetailPaneHeight();
